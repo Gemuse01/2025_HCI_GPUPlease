@@ -1,13 +1,55 @@
-import React from 'react';
-import { Menu, Bell, Search, User as UserIcon, ChevronDown } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Menu, Bell, Search, User as UserIcon, ChevronDown, LogOut, UserCog } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
+import { useNavigate } from 'react-router-dom';
+import { UserPersona } from '../types';
 
 interface NavbarProps {
   toggleSidebar: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
-  const { user } = useApp();
+  const { user, resetApp, updateUser } = useApp();
+  const navigate = useNavigate();
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // 외부 클릭 시 드롭다운 닫기
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  const handleLogout = () => {
+    if (window.confirm('정말 로그아웃하시겠습니까? 모든 데이터(포트폴리오, 거래 내역, 일기 등)가 초기화됩니다.')) {
+      resetApp();
+      navigate('/onboarding');
+      setIsDropdownOpen(false);
+    }
+  };
+
+  const handleResetPersona = () => {
+    if (window.confirm('페르소나를 재설정하시겠습니까? 포트폴리오와 거래 내역은 유지되고 사용자 정보만 초기화됩니다.')) {
+      // 사용자 정보만 초기화하고 포트폴리오, 거래 내역, 일기는 유지
+      updateUser({
+        name: '',
+        persona: UserPersona.UNDECIDED,
+        risk_tolerance: 'medium',
+        goal: 'learning',
+        is_onboarded: false
+      });
+      navigate('/onboarding');
+      setIsDropdownOpen(false);
+    }
+  };
 
   return (
     <header className="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8 shrink-0 z-30 relative">
@@ -29,19 +71,43 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
 
 
         {/* User Profile Summary */}
-        <div className="flex items-center gap-3 pl-2 sm:pl-4 sm:border-l border-gray-200 sm:ml-2">
+        <div className="flex items-center gap-3 pl-2 sm:pl-4 sm:border-l border-gray-200 sm:ml-2 relative" ref={dropdownRef}>
            <div className="hidden md:block text-right">
               <div className="text-sm font-bold text-gray-900 leading-tight">{user.name || 'Guest'}</div>
               <div className="text-xs font-medium text-gray-500 capitalize truncate max-w-[100px]">
                 {user.persona !== 'UNDECIDED' ? user.persona.toLowerCase().replace('_', ' ') : 'New User'}
               </div>
            </div>
-           <button className="flex items-center gap-2 p-1 rounded-full hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-200">
+           <button 
+             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+             className="flex items-center gap-2 p-1 rounded-full hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-200"
+           >
               <div className="h-9 w-9 rounded-full bg-gradient-to-br from-primary-100 to-indigo-100 flex items-center justify-center text-primary-700 font-bold border border-primary-200 shadow-sm">
                 {user.name ? user.name.charAt(0).toUpperCase() : <UserIcon size={18} />}
               </div>
-              <ChevronDown size={16} className="text-gray-400 hidden sm:block" />
+              <ChevronDown size={16} className={`text-gray-400 hidden sm:block transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
            </button>
+
+           {/* Dropdown Menu */}
+           {isDropdownOpen && (
+             <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+               <button
+                 onClick={handleResetPersona}
+                 className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+               >
+                 <UserCog size={18} className="text-gray-400" />
+                 <span>페르소나 재설정</span>
+               </button>
+               <div className="border-t border-gray-100 my-1"></div>
+               <button
+                 onClick={handleLogout}
+                 className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+               >
+                 <LogOut size={18} className="text-red-400" />
+                 <span>로그아웃</span>
+               </button>
+             </div>
+           )}
         </div>
       </div>
     </header>

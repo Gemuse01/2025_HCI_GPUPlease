@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../contexts/AppContext';
 import { UserPersona } from '../types';
@@ -13,6 +13,17 @@ const Onboarding: React.FC = () => {
     risk: 'medium' as 'low' | 'medium' | 'high',
     persona: UserPersona.UNDECIDED
   });
+
+  // 컴포넌트가 마운트될 때 step을 1로 초기화
+  useEffect(() => {
+    setStep(1);
+    setFormData({
+      name: '',
+      goal: 'learning',
+      risk: 'medium',
+      persona: UserPersona.UNDECIDED
+    });
+  }, []);
 
   const handleNext = () => setStep(p => p + 1);
   const handleBack = () => setStep(p => p - 1);
@@ -95,7 +106,6 @@ const Onboarding: React.FC = () => {
                     key={opt.type}
                     onClick={() => {
                       setFormData({ ...formData, persona: opt.type });
-                      setTimeout(handleNext, 300); // Auto advance for better UX
                     }}
                     className={`w-full py-3 px-4 border rounded-md text-left text-sm transition-colors ${formData.persona === opt.type ? 'border-primary-500 ring-2 ring-primary-200 bg-primary-50 text-primary-900' : 'border-gray-300 hover:bg-gray-50 text-gray-900 bg-white'}`}
                   >
