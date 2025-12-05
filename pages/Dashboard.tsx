@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import { TrendingUp, TrendingDown, PieChart, Activity, ArrowRight, Wallet, History, BookOpen, Clock, X, Lightbulb, GraduationCap, CheckCircle2, XCircle } from 'lucide-react';
-import { MOCK_DAILY_ADVICE, MOCK_STOCKS, MOCK_DAILY_QUIZ } from '../constants';
+import { MOCK_DAILY_ADVICE, MOCK_STOCKS, MOCK_DAILY_QUIZ, INITIAL_CAPITAL, INITIAL_CAPITAL_KRW } from '../constants';
 import ReactMarkdown from 'react-markdown';
 
 const LEARNING_CARDS = [
@@ -40,18 +40,41 @@ const Dashboard: React.FC = () => {
     isCorrect: false
   });
 
-  // Calculate current total portfolio value
-  const currentHoldingsValue = useMemo(() => {
-    return portfolio.assets.reduce((sum, asset) => {
+  // 한국 주식인지 확인하는 헬퍼 함수
+  const isKoreanStock = (symbol: string) => {
+    return symbol.endsWith('.KS') || symbol.endsWith('.KQ');
+  };
+
+  // Calculate current total portfolio value (한국 주식과 나스닥 구분)
+  const { nasdaqHoldingsValue, koreanHoldingsValue } = useMemo(() => {
+    let nasdaq = 0;
+    let korean = 0;
+    
+    portfolio.assets.forEach(asset => {
       const currentPrice = MOCK_STOCKS.find(s => s.symbol === asset.symbol)?.price || asset.avg_price;
-      return sum + (asset.quantity * currentPrice);
-    }, 0);
+      const value = asset.quantity * currentPrice;
+      
+      if (isKoreanStock(asset.symbol)) {
+        korean += value;
+      } else {
+        nasdaq += value;
+      }
+    });
+    
+    return { nasdaqHoldingsValue: nasdaq, koreanHoldingsValue: korean };
   }, [portfolio.assets]);
 
-  const totalValue = portfolio.cash + currentHoldingsValue;
-  const initialValue = user.initial_capital;
-  const totalReturn = totalValue - initialValue;
-  const totalReturnPct = (totalReturn / initialValue) * 100;
+  const nasdaqTotalValue = portfolio.cash + nasdaqHoldingsValue;
+  const koreanTotalValue = portfolio.cash_krw + koreanHoldingsValue;
+  
+  const nasdaqReturn = nasdaqTotalValue - INITIAL_CAPITAL;
+  const koreanReturn = koreanTotalValue - INITIAL_CAPITAL_KRW;
+  
+  const nasdaqReturnPct = (nasdaqReturn / INITIAL_CAPITAL) * 100;
+  const koreanReturnPct = (koreanReturn / INITIAL_CAPITAL_KRW) * 100;
+  
+  // 전체 Total Value (표시용, 달러 기준으로만)
+  const totalValue = nasdaqTotalValue;
 
   const dailyAdvice = useMemo(() => {
     const dayOfYear = Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 1000 / 60 / 60 / 24);
@@ -82,50 +105,68 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Key Metrics - Responsive Font Sizing Applied */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Total Value Card */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider">Total Net Worth</h3>
-            <div className="p-2 bg-primary-50 text-primary-600 rounded-lg">
-              <PieChart size={20} />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        {/* Total Value Card - NASDAQ */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">Net Worth (NASDAQ)</h3>
+            <div className="p-1.5 bg-primary-50 text-primary-600 rounded-lg shrink-0">
+              <PieChart size={16} />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-gray-900 mb-2">
-            ${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <p className="text-lg sm:text-xl md:text-2xl font-extrabold text-gray-900 mb-2 truncate" title={`$${nasdaqTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}>
+            ${nasdaqTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <div className={`flex items-center text-sm font-bold ${totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {totalReturn >= 0 ? <TrendingUp size={16} className="mr-1" /> : <TrendingDown size={16} className="mr-1" />}
-            <span>{totalReturn >= 0 ? '+' : ''}{totalReturn.toLocaleString(undefined, { maximumFractionDigits: 0 })} ({totalReturnPct.toFixed(2)}%)</span>
-            <span className="text-gray-400 font-medium ml-2">all time</span>
+          <div className={`flex items-center gap-1 text-xs font-bold ${nasdaqReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {nasdaqReturn >= 0 ? <TrendingUp size={14} className="shrink-0" /> : <TrendingDown size={14} className="shrink-0" />}
+            <span className="truncate min-w-0">{nasdaqReturn >= 0 ? '+' : ''}${nasdaqReturn.toLocaleString(undefined, { maximumFractionDigits: 0 })} ({nasdaqReturnPct.toFixed(2)}%)</span>
+            <span className="text-gray-400 font-medium shrink-0 text-[10px]">all time</span>
+          </div>
+        </div>
+        
+        {/* Total Value Card - Korean */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">Net Worth (한국)</h3>
+            <div className="p-1.5 bg-primary-50 text-primary-600 rounded-lg shrink-0">
+              <PieChart size={16} />
+            </div>
+          </div>
+          <p className="text-lg sm:text-xl md:text-2xl font-extrabold text-gray-900 mb-2 truncate" title={`₩${koreanTotalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}>
+            ₩{koreanTotalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </p>
+          <div className={`flex items-center gap-1 text-xs font-bold ${koreanReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {koreanReturn >= 0 ? <TrendingUp size={14} className="shrink-0" /> : <TrendingDown size={14} className="shrink-0" />}
+            <span className="truncate min-w-0">{koreanReturn >= 0 ? '+' : ''}₩{koreanReturn.toLocaleString(undefined, { maximumFractionDigits: 0 })} ({koreanReturnPct.toFixed(2)}%)</span>
+            <span className="text-gray-400 font-medium shrink-0 text-[10px]">all time</span>
           </div>
         </div>
 
         {/* Cash Card */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider">Available Cash</h3>
-            <div className="p-2 bg-green-50 text-green-600 rounded-lg">
-              <Wallet size={20} />
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+           <div className="flex items-center justify-between mb-3 gap-2">
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">Available Cash</h3>
+            <div className="p-1.5 bg-green-50 text-green-600 rounded-lg shrink-0">
+              <Wallet size={16} />
             </div>
           </div>
-          <p className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-gray-900 mb-2">
+          <p className="text-lg sm:text-xl md:text-2xl font-extrabold text-gray-900 mb-2 truncate" title={`$${portfolio.cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}>
             ${portfolio.cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <div className="flex items-center text-sm font-medium text-gray-500">
+          <div className="flex items-center text-xs font-medium text-gray-500">
              <span>Ready to deploy</span>
           </div>
         </div>
 
         {/* Market Status Card */}
-        <div className={`p-6 rounded-2xl shadow-sm border ${marketCondition === 'BULL' ? 'bg-green-50 border-green-100' : marketCondition === 'BEAR' ? 'bg-orange-50 border-orange-100' : marketCondition === 'CRASH' ? 'bg-red-50 border-red-100' : marketCondition === 'LIVE' ? 'bg-purple-50 border-purple-100' : 'bg-blue-50 border-blue-100'}`}>
-           <div className="flex items-center justify-between mb-4">
-            <h3 className={`text-sm font-bold uppercase tracking-wider ${marketCondition === 'BULL' ? 'text-green-800' : marketCondition === 'BEAR' ? 'text-orange-800' : marketCondition === 'CRASH' ? 'text-red-800' : marketCondition === 'LIVE' ? 'text-purple-800' : 'text-blue-800'}`}>Market Condition</h3>
-            <div className={`p-2 rounded-lg ${marketCondition === 'BULL' ? 'bg-green-100 text-green-800' : marketCondition === 'BEAR' ? 'bg-orange-100 text-orange-800' : marketCondition === 'CRASH' ? 'bg-red-100 text-red-800' : marketCondition === 'LIVE' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}`}>
-              <Activity size={20} />
+        <div className={`p-4 rounded-2xl shadow-sm border min-w-0 ${marketCondition === 'BULL' ? 'bg-green-50 border-green-100' : marketCondition === 'BEAR' ? 'bg-orange-50 border-orange-100' : marketCondition === 'CRASH' ? 'bg-red-50 border-red-100' : marketCondition === 'LIVE' ? 'bg-purple-50 border-purple-100' : 'bg-blue-50 border-blue-100'}`}>
+           <div className="flex items-center justify-between mb-3 gap-2">
+            <h3 className={`text-xs font-bold uppercase tracking-wider truncate min-w-0 ${marketCondition === 'BULL' ? 'text-green-800' : marketCondition === 'BEAR' ? 'text-orange-800' : marketCondition === 'CRASH' ? 'text-red-800' : marketCondition === 'LIVE' ? 'text-purple-800' : 'text-blue-800'}`}>Market Condition</h3>
+            <div className={`p-1.5 rounded-lg shrink-0 ${marketCondition === 'BULL' ? 'bg-green-100 text-green-800' : marketCondition === 'BEAR' ? 'bg-orange-100 text-orange-800' : marketCondition === 'CRASH' ? 'bg-red-100 text-red-800' : marketCondition === 'LIVE' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}`}>
+              <Activity size={16} />
             </div>
           </div>
-          <p className={`text-2xl sm:text-3xl lg:text-4xl font-extrabold mb-2 ${marketCondition === 'BULL' ? 'text-green-900' : marketCondition === 'BEAR' ? 'text-orange-900' : marketCondition === 'CRASH' ? 'text-red-900' : marketCondition === 'LIVE' ? 'text-purple-900' : 'text-blue-900'}`}>
+          <p className={`text-lg sm:text-xl md:text-2xl font-extrabold mb-2 truncate ${marketCondition === 'BULL' ? 'text-green-900' : marketCondition === 'BEAR' ? 'text-orange-900' : marketCondition === 'CRASH' ? 'text-red-900' : marketCondition === 'LIVE' ? 'text-purple-900' : 'text-blue-900'}`}>
             {marketCondition}
           </p>
           <div className={`flex items-center text-sm font-medium ${marketCondition === 'BULL' ? 'text-green-700' : marketCondition === 'BEAR' ? 'text-orange-700' : marketCondition === 'CRASH' ? 'text-red-700' : marketCondition === 'LIVE' ? 'text-purple-700' : 'text-blue-700'}`}>

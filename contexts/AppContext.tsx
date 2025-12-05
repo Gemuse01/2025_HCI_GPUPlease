@@ -12,7 +12,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return { ...DEFAULT_STATE, ...parsed };
+        const merged = { ...DEFAULT_STATE, ...parsed };
+        // 기존 사용자 데이터 마이그레이션: cash_krw가 없으면 기본값 추가
+        if (merged.portfolio && typeof merged.portfolio.cash_krw === 'undefined') {
+          merged.portfolio.cash_krw = DEFAULT_STATE.portfolio.cash_krw;
+        }
+        return merged;
       } catch (e) {
         return DEFAULT_STATE;
       }
@@ -35,15 +40,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const executeTrade = useCallback((type: 'BUY' | 'SELL', symbol: string, quantity: number, price: number) => {
     setState(prev => {
       const totalCost = quantity * price;
+      const isKoreanStock = symbol.endsWith('.KS') || symbol.endsWith('.KQ');
+      
       let newCash = prev.portfolio.cash;
+      let newCashKrw = prev.portfolio.cash_krw;
       let newAssets = [...prev.portfolio.assets];
 
       if (type === 'BUY') {
-        if (newCash < totalCost) {
-          alert("Insufficient virtual funds.");
-          return prev;
+        if (isKoreanStock) {
+          if (newCashKrw < totalCost) {
+            alert("원화 잔액이 부족합니다.");
+            return prev;
+          }
+          newCashKrw -= totalCost;
+        } else {
+          if (newCash < totalCost) {
+            alert("Insufficient virtual funds.");
+            return prev;
+          }
+          newCash -= totalCost;
         }
-        newCash -= totalCost;
+        
         const existingAssetIndex = newAssets.findIndex(a => a.symbol === symbol);
         if (existingAssetIndex >= 0) {
           const asset = newAssets[existingAssetIndex];
@@ -64,14 +81,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           alert("Insufficient assets to sell.");
           return prev;
         }
-        newCash += totalCost;
+        
+        if (isKoreanStock) {
+          newCashKrw += totalCost;
+        } else {
+          newCash += totalCost;
+        }
+        
         newAssets[existingAssetIndex].quantity -= quantity;
         if (newAssets[existingAssetIndex].quantity === 0) {
           newAssets.splice(existingAssetIndex, 1);
         }
       }
 
-      const currentPortfolioValue = newCash + newAssets.reduce((sum, asset) => sum + (asset.quantity * (asset.symbol === symbol ? price : asset.avg_price)), 0);
+      // 포트폴리오 가치 계산 (달러 기준으로 통합)
+      const currentPortfolioValue = newCash + newAssets.reduce((sum, asset) => {
+        const assetPrice = asset.symbol === symbol ? price : asset.avg_price;
+        return sum + (asset.quantity * assetPrice);
+      }, 0);
 
       const newTransaction: Transaction = {
         id: Date.now().toString(),
@@ -87,6 +114,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         portfolio: {
           ...prev.portfolio,
           cash: newCash,
+          cash_krw: newCashKrw,
           assets: newAssets,
           total_value_history: [
             ...prev.portfolio.total_value_history,

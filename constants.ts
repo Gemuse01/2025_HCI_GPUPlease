@@ -1,6 +1,7 @@
 import { Stock, UserPersona, AppState, NewsItem } from "./types";
 
 export const INITIAL_CAPITAL = 100000; // $100k virtual money
+export const INITIAL_CAPITAL_KRW = 100000000; // 1억원 virtual money
 
 export const DEFAULT_STATE: AppState = {
   user: {
@@ -13,6 +14,7 @@ export const DEFAULT_STATE: AppState = {
   },
   portfolio: {
     cash: INITIAL_CAPITAL,
+    cash_krw: INITIAL_CAPITAL_KRW,
     assets: [],
     total_value_history: [
       { date: '2024-05-01', value: INITIAL_CAPITAL },

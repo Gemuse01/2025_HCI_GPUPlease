@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../contexts/AppContext';
-import { MOCK_STOCKS } from '../constants';
+import { MOCK_STOCKS, INITIAL_CAPITAL, INITIAL_CAPITAL_KRW } from '../constants';
 import { Stock } from '../types';
 import {
   TrendingUp,
@@ -14,7 +14,7 @@ import {
   AlertCircle,
   History,
 } from 'lucide-react';
-import { searchNasdaqStocks, getRealtimeQuotes } from '../services/stockService';
+import { searchNasdaqStocks, getYFinanceQuotes } from '../services/stockService';
 
 const QUOTE_CACHE_KEY = 'finguide_live_quotes_v1';
 
@@ -31,6 +31,7 @@ const VirtualTrading: React.FC = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchCache, setSearchCache] = useState<Record<string, Stock[]>>({});
   const [livePrices, setLivePrices] = useState<Record<string, { price: number; change_pct: number }>>({});
+  const [stockNames, setStockNames] = useState<Record<string, string>>({}); // 종목 이름 캐시
   const [lastTrade, setLastTrade] = useState<{ type: 'BUY' | 'SELL'; symbol: string } | null>(null);
   const [showReflection, setShowReflection] = useState(false);
   const [reflectionData, setReflectionData] = useState({
@@ -42,6 +43,11 @@ const VirtualTrading: React.FC = () => {
   // 화면에 보여줄 종목 리스트 (검색 결과가 있으면 그걸 우선 사용)
   const visibleStocks: Stock[] =
     searchQuery.trim() && searchResults.length > 0 ? searchResults : MOCK_STOCKS;
+
+  // 한국 주식인지 확인하는 헬퍼 함수 (useMemo보다 먼저 정의)
+  const isKoreanStock = (symbol: string) => {
+    return symbol.endsWith('.KS') || symbol.endsWith('.KQ');
+  };
 
   // --- 로컬 캐시에서 마지막 실시간 시세 복원 ---
   useEffect(() => {
@@ -57,19 +63,33 @@ const VirtualTrading: React.FC = () => {
   }, []);
 
   // --- Portfolio Calculations (실시간 시세를 반영한 총 평가액) ---
-  const currentHoldingsValue = useMemo(() => {
-    return portfolio.assets.reduce((sum, asset) => {
+  const { nasdaqHoldingsValue, koreanHoldingsValue } = useMemo(() => {
+    let nasdaq = 0;
+    let korean = 0;
+    
+    portfolio.assets.forEach(asset => {
       const live = livePrices[asset.symbol];
-      const fallbackPrice =
-        MOCK_STOCKS.find((s) => s.symbol === asset.symbol)?.price || asset.avg_price;
-      const currentPrice = live?.price ?? fallbackPrice;
-      return sum + asset.quantity * currentPrice;
-    }, 0);
+      const currentPrice = live?.price ?? asset.avg_price;
+      const value = asset.quantity * currentPrice;
+      
+      if (isKoreanStock(asset.symbol)) {
+        korean += value;
+      } else {
+        nasdaq += value;
+      }
+    });
+    
+    return { nasdaqHoldingsValue: nasdaq, koreanHoldingsValue: korean };
   }, [livePrices, portfolio.assets]);
 
-  const totalEquity = portfolio.cash + currentHoldingsValue;
-  const totalPL = totalEquity - user.initial_capital;
-  const totalPLPercent = (totalPL / user.initial_capital) * 100;
+  const nasdaqEquity = portfolio.cash + nasdaqHoldingsValue;
+  const koreanEquity = portfolio.cash_krw + koreanHoldingsValue;
+  
+  const nasdaqPL = nasdaqEquity - INITIAL_CAPITAL;
+  const koreanPL = koreanEquity - INITIAL_CAPITAL_KRW;
+  
+  const nasdaqPLPercent = (nasdaqPL / INITIAL_CAPITAL) * 100;
+  const koreanPLPercent = (koreanPL / INITIAL_CAPITAL_KRW) * 100;
 
   // --- 나스닥 종목 검색 ---
   const handleSearch = async (e: React.FormEvent) => {
@@ -122,7 +142,7 @@ const VirtualTrading: React.FC = () => {
 
     const fetchQuotes = async () => {
       try {
-        const quotes = await getRealtimeQuotes(symbols);
+        const quotes = await getYFinanceQuotes(symbols);
         if (!isCancelled) {
           setLivePrices((prev) => {
             const merged = { ...prev, ...quotes };
@@ -180,6 +200,105 @@ const VirtualTrading: React.FC = () => {
     return portfolio.assets.find((a) => a.symbol === symbol)?.quantity || 0;
   };
 
+  // 통화 포맷팅 헬퍼 함수
+  const formatPrice = (price: number, symbol: string) => {
+    if (isKoreanStock(symbol)) {
+      return `₩${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    }
+    return `$${price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  };
+
+  // 심볼로 종목 이름 찾기
+  const getStockName = (symbol: string): string => {
+    // 캐시에서 찾기
+    if (stockNames[symbol]) return stockNames[symbol];
+    
+    // visibleStocks에서 찾기
+    const found = visibleStocks.find(s => s.symbol === symbol);
+    if (found) {
+      setStockNames(prev => ({ ...prev, [symbol]: found.name }));
+      return found.name;
+    }
+    
+    // searchResults에서 찾기
+    const foundInSearch = searchResults.find(s => s.symbol === symbol);
+    if (foundInSearch) {
+      setStockNames(prev => ({ ...prev, [symbol]: foundInSearch.name }));
+      return foundInSearch.name;
+    }
+    
+    // MOCK_STOCKS에서 찾기
+    const foundInMock = MOCK_STOCKS.find(s => s.symbol === symbol);
+    if (foundInMock) {
+      setStockNames(prev => ({ ...prev, [symbol]: foundInMock.name }));
+      return foundInMock.name;
+    }
+    
+    // 못 찾으면 심볼 반환
+    return symbol;
+  };
+
+  // 보유 종목과 거래 내역의 종목 이름 가져오기
+  useEffect(() => {
+    const fetchStockNames = async () => {
+      const symbolsToFetch: string[] = [];
+      const allSymbols = new Set<string>();
+      
+      // 보유 종목의 심볼
+      portfolio.assets.forEach(asset => {
+        allSymbols.add(asset.symbol);
+      });
+      
+      // 거래 내역의 심볼
+      transactions.forEach(tx => {
+        allSymbols.add(tx.symbol);
+      });
+      
+      // 이미 이름을 알고 있는 종목 제외
+      allSymbols.forEach(symbol => {
+        if (!stockNames[symbol] 
+            && !visibleStocks.find(s => s.symbol === symbol) 
+            && !searchResults.find(s => s.symbol === symbol) 
+            && !MOCK_STOCKS.find(s => s.symbol === symbol)) {
+          symbolsToFetch.push(symbol);
+        }
+      });
+      
+      if (symbolsToFetch.length === 0) return;
+      
+      // 백엔드 API로 종목 이름 가져오기
+      const namePromises = symbolsToFetch.map(async (symbol) => {
+        try {
+          const res = await fetch(`http://localhost:5002/api/search?query=${encodeURIComponent(symbol)}`);
+          if (!res.ok) return null;
+          const data = await res.json();
+          const result = data.results?.find((r: any) => r.symbol === symbol);
+          if (result && result.name) {
+            return { symbol, name: result.name };
+          }
+        } catch (err) {
+          console.error(`[yfinance] Failed to fetch name for ${symbol}:`, err);
+        }
+        return null;
+      });
+      
+      const results = await Promise.all(namePromises);
+      const newNames: Record<string, string> = {};
+      results.forEach(result => {
+        if (result) {
+          newNames[result.symbol] = result.name;
+        }
+      });
+      
+      if (Object.keys(newNames).length > 0) {
+        setStockNames(prev => ({ ...prev, ...newNames }));
+      }
+    };
+    
+    fetchStockNames();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolio.assets.map(a => a.symbol).join(','), transactions.map(t => t.symbol).join(',')]);
+
   const handleSaveReflection = () => {
     if (lastTrade) {
        addDiaryEntry({
@@ -204,46 +323,85 @@ const VirtualTrading: React.FC = () => {
             Virtual Trading Floor
           </h1>
           <p className="text-gray-600 mt-1">
-            나스닥 종목을 검색해서 가상으로 매매해보면서, 실시간 시세 변화에 익숙해져 보세요.
+            나스닥 및 한국 주식의 <strong>심볼(ticker)</strong>을 검색해서 가상으로 매매해보세요. 
+            한국 주식은 코스피는 <strong>.KS</strong>, 코스닥은 <strong>.KQ</strong>를 붙여주세요.
           </p>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
-                <div className="flex items-center gap-2 text-gray-500 mb-1">
-                    <PieChart size={16} />
-                    <span className="text-xs font-bold uppercase tracking-wider">Total Equity</span>
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+                <div className="flex items-center gap-1.5 text-gray-500 mb-1">
+                    <PieChart size={14} className="shrink-0" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider truncate">Equity (NASDAQ)</span>
                 </div>
-            <p className="text-xl font-extrabold text-gray-900">
-              ${totalEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            <p className="text-sm sm:text-base font-extrabold text-gray-900 truncate" title={`$${nasdaqEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}>
+              ${nasdaqEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </p>
             </div>
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
-                <div className="flex items-center gap-2 text-gray-500 mb-1">
-                    <Wallet size={16} />
-                    <span className="text-xs font-bold uppercase tracking-wider">Buying Power</span>
+            <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+                <div className="flex items-center gap-1.5 text-gray-500 mb-1">
+                    <PieChart size={14} className="shrink-0" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider truncate">Equity (한국)</span>
                 </div>
-            <p className="text-xl font-extrabold text-gray-900">
-              ${portfolio.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            <p className="text-sm sm:text-base font-extrabold text-gray-900 truncate" title={`₩${koreanEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}>
+              ₩{koreanEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </p>
             </div>
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 col-span-2 md:col-span-2">
-                 <div className="flex items-center gap-2 text-gray-500 mb-1">
-                    <BarChart2 size={16} />
-                    <span className="text-xs font-bold uppercase tracking-wider">Total P/L</span>
+            <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+                <div className="flex items-center gap-1.5 text-gray-500 mb-1">
+                    <Wallet size={14} className="shrink-0" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider truncate">Buying Power</span>
+                </div>
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-xs sm:text-sm font-extrabold text-gray-900 truncate" title={`$${portfolio.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}>
+                ${portfolio.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </p>
+              <p className="text-[10px] sm:text-xs font-bold text-gray-600 truncate" title={`₩${portfolio.cash_krw.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}>
+                ₩{portfolio.cash_krw.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </p>
+            </div>
+            </div>
+            <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+                 <div className="flex items-center gap-1.5 text-gray-500 mb-1">
+                    <BarChart2 size={14} className="shrink-0" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider truncate">P/L (NASDAQ)</span>
                 </div>
             <div
-              className={`flex items-center text-xl font-extrabold ${
-                totalPL >= 0 ? 'text-green-600' : 'text-red-600'
+              className={`flex items-center gap-1 text-xs sm:text-sm font-extrabold ${
+                nasdaqPL >= 0 ? 'text-green-600' : 'text-red-600'
               }`}
             >
-                    {totalPL >= 0 ? '+' : ''}${totalPL.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    <span className="truncate min-w-0">
+                      {nasdaqPL >= 0 ? '+' : ''}${nasdaqPL.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </span>
               <span
-                className={`ml-2 text-sm font-bold px-2 py-0.5 rounded-md ${
-                  totalPL >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                className={`text-[10px] sm:text-xs font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                  nasdaqPL >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                 }`}
               >
-                        {totalPLPercent.toFixed(2)}%
+                        {nasdaqPLPercent.toFixed(2)}%
+                    </span>
+                </div>
+            </div>
+            <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-200 min-w-0">
+                 <div className="flex items-center gap-1.5 text-gray-500 mb-1">
+                    <BarChart2 size={14} className="shrink-0" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider truncate">P/L (한국)</span>
+                </div>
+            <div
+              className={`flex items-center gap-1 text-xs sm:text-sm font-extrabold ${
+                koreanPL >= 0 ? 'text-green-600' : 'text-red-600'
+              }`}
+            >
+                    <span className="truncate min-w-0">
+                      {koreanPL >= 0 ? '+' : ''}₩{koreanPL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+              <span
+                className={`text-[10px] sm:text-xs font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                  koreanPL >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}
+              >
+                        {koreanPLPercent.toFixed(2)}%
                     </span>
                 </div>
             </div>
@@ -263,7 +421,7 @@ const VirtualTrading: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="나스닥 종목 심볼이나 이름으로 검색 (예: AAPL, NVIDIA)..."
+              placeholder="심볼(ticker)만 검색 가능 (예: AAPL, 005930.KS, 123456.KQ)..."
               className="w-full border-none focus:ring-0 text-sm md:text-base text-gray-900 placeholder-gray-400"
             />
           </div>
@@ -337,7 +495,9 @@ const VirtualTrading: React.FC = () => {
 
                 <div className="flex justify-between items-end mb-6">
                    <div>
-                      <p className="text-3xl font-extrabold text-gray-900">${price.toFixed(2)}</p>
+                      <p className="text-3xl font-extrabold text-gray-900">
+                        {formatPrice(price, stock.symbol)}
+                      </p>
                    </div>
                    <div className="text-right">
                       <span className="inline-block px-2 py-1 text-xs font-bold rounded-md uppercase tracking-wider bg-blue-100 text-blue-800">
@@ -375,7 +535,7 @@ const VirtualTrading: React.FC = () => {
                      {tradeType === 'BUY' ? 'Buy' : 'Sell'} {selectedStock.symbol}
                    </h2>
               <p className="text-sm text-gray-500">
-                현재가 ${selectedStock.price.toFixed(2)} · 보유 수량 {getOwnedQuantity(selectedStock.symbol)}
+                현재가 {formatPrice(selectedStock.price, selectedStock.symbol)} · 보유 수량 {getOwnedQuantity(selectedStock.symbol)}
               </p>
                     </div>
             <div className="flex p-1 bg-gray-100 rounded-xl">
@@ -414,19 +574,24 @@ const VirtualTrading: React.FC = () => {
           <div className="flex justify-between py-3 border-t border-b border-gray-100 text-sm">
             <span className="text-gray-500 font-medium">예상 거래금액</span>
                     <span className="font-extrabold text-gray-900 text-lg">
-              ${(Number(quantity || 0) * selectedStock.price).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
+              {formatPrice(Number(quantity || 0) * selectedStock.price, selectedStock.symbol)}
                     </span>
                   </div>
 
-          {tradeType === 'BUY' && Number(quantity) * selectedStock.price > portfolio.cash && (
-            <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
+          {tradeType === 'BUY' && (() => {
+            const totalCost = Number(quantity) * selectedStock.price;
+            const isKorean = isKoreanStock(selectedStock.symbol);
+            const insufficient = isKorean 
+              ? totalCost > portfolio.cash_krw 
+              : totalCost > portfolio.cash;
+            
+            return insufficient && (
+              <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
                        <AlertCircle size={18} />
-              보유 현금이 부족합니다.
+                {isKorean ? '원화 잔액이 부족합니다.' : '보유 현금이 부족합니다.'}
                      </div>
-                  )}
+            );
+          })()}
 
                   {tradeType === 'SELL' && Number(quantity) > getOwnedQuantity(selectedStock.symbol) && (
             <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
@@ -438,11 +603,26 @@ const VirtualTrading: React.FC = () => {
           <div className="flex gap-3">
                   <button
                     onClick={handleExecute}
-                    disabled={
-                Number(quantity) <= 0 ||
-                (tradeType === 'BUY' && Number(quantity) * selectedStock.price > portfolio.cash) ||
-                (tradeType === 'SELL' && Number(quantity) > getOwnedQuantity(selectedStock.symbol))
-              }
+                    disabled={(() => {
+                      const qty = Number(quantity);
+                      if (qty <= 0) return true;
+                      
+                      if (tradeType === 'BUY') {
+                        const totalCost = qty * selectedStock.price;
+                        const isKorean = isKoreanStock(selectedStock.symbol);
+                        if (isKorean) {
+                          return totalCost > portfolio.cash_krw;
+                        } else {
+                          return totalCost > portfolio.cash;
+                        }
+                      }
+                      
+                      if (tradeType === 'SELL') {
+                        return qty > getOwnedQuantity(selectedStock.symbol);
+                      }
+                      
+                      return false;
+                    })()}
               className={`flex-1 py-3 rounded-xl font-extrabold text-white text-lg transition-all ${
                       tradeType === 'BUY' 
                         ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-300' 
@@ -486,6 +666,9 @@ const VirtualTrading: React.FC = () => {
                     <th className="text-left py-2 px-2 text-xs font-bold text-gray-500 uppercase">
                       Symbol
                     </th>
+                    <th className="text-left py-2 px-2 text-xs font-bold text-gray-500 uppercase">
+                      Name
+                    </th>
                     <th className="text-right py-2 px-2 text-xs font-bold text-gray-500 uppercase">
                       Qty
                     </th>
@@ -501,15 +684,17 @@ const VirtualTrading: React.FC = () => {
                   {portfolio.assets.map((asset) => {
                     const live = livePrices[asset.symbol];
                     const currentPrice = live?.price ?? asset.avg_price;
+                    const stockName = getStockName(asset.symbol);
                     return (
                       <tr key={asset.symbol}>
                         <td className="py-2 px-2 font-bold text-gray-900">{asset.symbol}</td>
+                        <td className="py-2 px-2 text-sm text-gray-600">{stockName}</td>
                         <td className="py-2 px-2 text-right">{asset.quantity}</td>
                         <td className="py-2 px-2 text-right text-gray-500">
-                          ${asset.avg_price.toFixed(2)}
+                          {formatPrice(asset.avg_price, asset.symbol)}
                         </td>
                         <td className="py-2 px-2 text-right font-bold">
-                          ${currentPrice.toFixed(2)}
+                          {formatPrice(currentPrice, asset.symbol)}
                         </td>
                       </tr>
                     );
@@ -538,6 +723,9 @@ const VirtualTrading: React.FC = () => {
                       <th className="text-left py-2 px-2 text-xs font-bold text-gray-500 uppercase">
                         Symbol
                       </th>
+                      <th className="text-left py-2 px-2 text-xs font-bold text-gray-500 uppercase">
+                        Name
+                      </th>
                       <th className="text-right py-2 px-2 text-xs font-bold text-gray-500 uppercase">
                         Qty
                       </th>
@@ -547,29 +735,33 @@ const VirtualTrading: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {transactions.map((tx) => (
-                      <tr key={tx.id}>
-                        <td className="py-2 px-2 text-xs text-gray-500">
-                          {new Date(tx.date).toLocaleString()}
-                        </td>
-                        <td className="py-2 px-2">
-                          <span
-                            className={`px-2 py-0.5 text-xs font-bold rounded-md uppercase ${
-                              tx.type === 'BUY'
-                                ? 'bg-blue-100 text-blue-700'
-                                : 'bg-green-100 text-green-700'
-                            }`}
-                          >
-                            {tx.type}
-                          </span>
-                        </td>
-                        <td className="py-2 px-2 font-bold text-gray-900">{tx.symbol}</td>
-                        <td className="py-2 px-2 text-right">{tx.quantity}</td>
-                        <td className="py-2 px-2 text-right text-gray-600">
-                          ${tx.price.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
+                    {transactions.map((tx) => {
+                      const stockName = getStockName(tx.symbol);
+                      return (
+                        <tr key={tx.id}>
+                          <td className="py-2 px-2 text-xs text-gray-500">
+                            {new Date(tx.date).toLocaleString()}
+                          </td>
+                          <td className="py-2 px-2">
+                            <span
+                              className={`px-2 py-0.5 text-xs font-bold rounded-md uppercase ${
+                                tx.type === 'BUY'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : 'bg-green-100 text-green-700'
+                              }`}
+                            >
+                              {tx.type}
+                            </span>
+                          </td>
+                          <td className="py-2 px-2 font-bold text-gray-900">{tx.symbol}</td>
+                          <td className="py-2 px-2 text-sm text-gray-600">{stockName}</td>
+                          <td className="py-2 px-2 text-right">{tx.quantity}</td>
+                          <td className="py-2 px-2 text-right text-gray-600">
+                            {formatPrice(tx.price, tx.symbol)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

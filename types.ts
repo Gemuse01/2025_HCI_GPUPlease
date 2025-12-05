@@ -33,7 +33,8 @@ export interface Asset {
 }
 
 export interface Portfolio {
-  cash: number;
+  cash: number; // USD
+  cash_krw: number; // KRW
   assets: Asset[];
   total_value_history: { date: string; value: number }[];
 }
