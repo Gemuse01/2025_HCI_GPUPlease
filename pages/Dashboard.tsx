@@ -1,44 +1,94 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
-import { TrendingUp, TrendingDown, PieChart, Activity, ArrowRight, Wallet, History, BookOpen, Clock, X, Lightbulb, GraduationCap, CheckCircle2, XCircle } from 'lucide-react';
-import { MOCK_DAILY_ADVICE, MOCK_STOCKS, MOCK_DAILY_QUIZ, INITIAL_CAPITAL, INITIAL_CAPITAL_KRW } from '../constants';
+import { TrendingUp, TrendingDown, PieChart, Activity, ArrowRight, Wallet, History, BookOpen, Clock, X, Lightbulb, GraduationCap, CheckCircle2, XCircle, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { MOCK_DAILY_ADVICE, MOCK_STOCKS, INITIAL_CAPITAL, INITIAL_CAPITAL_KRW, DAILY_QUIZZES } from '../constants';
+import { generateDashboardLearningCards, generateDashboardQuizzes, type LearningCard, type DashboardQuiz } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
 
-const LEARNING_CARDS = [
+const DEFAULT_LEARNING_CARDS: LearningCard[] = [
   {
     id: 1,
     title: "What is Volatility?",
     duration: "3 min",
     category: "Basic Term",
-    content: "**Volatility** is a statistical measure of the dispersion of returns for a given security or market index. \n\nIn simpler terms, it represents how much the price of an asset swings around the mean price. High volatility means the price can change dramatically over a short time period in either direction. Lower volatility means a security's value does not fluctuate dramatically, and tends to be more steady."
+    content:
+      "**Volatility** is a statistical measure of how much the price of an asset moves around its average.\n\n" +
+      "In practice, it tells you how \"shaky\" a stock is. High volatility means the price can move a lot in a short time (both up and down). " +
+      "Low‑volatility stocks move more slowly and are often used as defensive positions.",
   },
   {
     id: 2,
     title: "Bull vs. Bear Markets",
     duration: "4 min",
     category: "Market Concepts",
-    content: "A **Bull Market** is a market that is on the rise and where the economy is sound; while a **Bear Market** exists in an economy that is receding, where most stocks are declining in value. \n\nInvestors typically want to buy when they expect a bull market and sell when they expect a bear market, though timing this exactly is very difficult."
+    content:
+      "A **Bull Market** is a period when prices and sentiment are rising for many months or years.\n\n" +
+      "A **Bear Market** is when broad indexes fall 20% or more from a recent high and pessimism dominates. " +
+      "Most investors cannot time these perfectly, so a better approach is to keep a long‑term plan and rebalance instead of reacting to every headline.",
   },
   {
     id: 3,
     title: "The Power of Diversification",
     duration: "5 min",
     category: "Strategy",
-    content: "**Diversification** is a risk management strategy that mixes a wide variety of investments within a portfolio. \n\nThe rationale behind this technique is that a portfolio constructed of different kinds of assets will, on average, yield higher long-term returns and lower the risk of any individual holding or security."
-  }
+    content:
+      "**Diversification** means not letting a single idea decide your entire future return.\n\n" +
+      "By combining assets that do not move in the same way (for example, US tech, Korean exporters, dividend stocks, and some cash), " +
+      "you can reduce the chance that one bad event wipes out your progress.",
+  },
+  {
+    id: 4,
+    title: "Dollar‑Cost Averaging",
+    duration: "4 min",
+    category: "Practical Tip",
+    content:
+      "**Dollar‑cost averaging (DCA)** means investing a fixed amount at regular intervals instead of trying to find the perfect entry price.\n\n" +
+      "This reduces timing risk and is especially helpful for beginners who feel nervous about buying at the top.",
+  },
+  {
+    id: 5,
+    title: "Reading a Candle Chart Quickly",
+    duration: "5 min",
+    category: "Charts",
+    content:
+      "Each **candlestick** shows the open, high, low and close for a period.\n\n" +
+      "- A long body means strong buying or selling pressure.\n" +
+      "- Long wicks mean the price moved a lot intraday but was rejected.\n" +
+      "You don't need complex patterns at first — just notice whether recent candles are mostly strong up, strong down, or indecisive.",
+  },
+  {
+    id: 6,
+    title: "KOSPI vs. KOSDAQ vs. US Stocks",
+    duration: "5 min",
+    category: "Market Concepts",
+    content:
+      "**KOSPI** is Korea's main large‑cap index, **KOSDAQ** hosts more growth‑oriented and smaller companies, " +
+      "and US markets like the S&P 500/Nasdaq contain many global leaders.\n\n" +
+      "Mixing these markets can give you both local familiarity and global diversification.",
+  },
 ];
 
 const Dashboard: React.FC = () => {
   const { user, portfolio, transactions, marketCondition } = useApp();
-  const [selectedCard, setSelectedCard] = useState<typeof LEARNING_CARDS[0] | null>(null);
-  
-  // Quiz State
-  const [quizState, setQuizState] = useState<{ answered: boolean; selectedIndex: number | null; isCorrect: boolean }>({
-    answered: false,
-    selectedIndex: null,
-    isCorrect: false
-  });
+  const [selectedCard, setSelectedCard] = useState<LearningCard | null>(null);
+  const [learningCards, setLearningCards] = useState<LearningCard[]>(DEFAULT_LEARNING_CARDS);
+
+  // Quiz state: 슬라이드 형태로 여러 문제를 순서대로 보여주기 위한 상태
+  const [quizStates, setQuizStates] = useState<Record<number, { answered: boolean; selectedIndex: number | null }>>({});
+  const [activeQuizIdx, setActiveQuizIdx] = useState(0);
+  const [quizPool, setQuizPool] = useState<DashboardQuiz[]>(DAILY_QUIZZES);
+  const [isLoadingLearning, setIsLoadingLearning] = useState(false);
+  const [isLoadingQuiz, setIsLoadingQuiz] = useState(false);
+  // Separate seeds so learning cards and quizzes can be regenerated independently
+  const [learningSeed, setLearningSeed] = useState(0);
+  const [quizSeed, setQuizSeed] = useState(0);
+  // Persisted flags so we don't refetch on every page change
+  const [learningInitialized, setLearningInitialized] = useState(false);
+  const [quizInitialized, setQuizInitialized] = useState(false);
+
+  const LS_LEARNING_KEY = "dashboard_learning_v1";
+  const LS_QUIZ_KEY = "dashboard_quizzes_v1";
 
   // 한국 주식인지 확인하는 헬퍼 함수
   const isKoreanStock = (symbol: string) => {
@@ -77,18 +127,187 @@ const Dashboard: React.FC = () => {
   const totalValue = nasdaqTotalValue;
 
   const dailyAdvice = useMemo(() => {
-    const dayOfYear = Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 1000 / 60 / 60 / 24);
+    const dayOfYear = Math.floor(
+      (new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) /
+        1000 /
+        60 /
+        60 /
+        24
+    );
     return MOCK_DAILY_ADVICE[dayOfYear % MOCK_DAILY_ADVICE.length];
   }, []);
 
-  const handleQuizAnswer = (index: number) => {
-    if (quizState.answered) return;
-    setQuizState({
-      answered: true,
-      selectedIndex: index,
-      isCorrect: index === MOCK_DAILY_QUIZ.correctIndex
+  // 오늘 날짜를 기준으로 퀴즈 풀 전체를 회전시켜 보여줌 (슬라이드로 몇 개든 이동 가능)
+  const visibleQuizzes = useMemo(() => {
+    if (!quizPool.length) return [];
+    const dayOfYear = Math.floor(
+      (new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) /
+        1000 /
+        60 /
+        60 /
+        24
+    );
+    const items: { quiz: DashboardQuiz; index: number }[] = [];
+    const start = dayOfYear % quizPool.length;
+    for (let i = 0; i < quizPool.length; i++) {
+      const idx = (start + i) % quizPool.length;
+      items.push({ quiz: quizPool[idx], index: idx });
+    }
+    return items;
+  }, [quizPool]);
+
+  const handleQuizAnswer = (quizIndex: number, optionIndex: number) => {
+    setQuizStates((prev) => {
+      const current = prev[quizIndex];
+      if (current?.answered) return prev; // 이미 답변한 퀴즈는 무시
+      return {
+        ...prev,
+        [quizIndex]: { answered: true, selectedIndex: optionIndex },
+      };
     });
   };
+
+  // Load / regenerate learning cards (with localStorage cache to persist across page changes)
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const loadLearning = async () => {
+      // 1) 초기 한 번은 localStorage 에서 복원 시도
+      if (!learningInitialized && typeof window !== "undefined") {
+        try {
+          const stored = window.localStorage.getItem(LS_LEARNING_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as { seed?: number; cards?: LearningCard[] };
+            if (parsed && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
+              setLearningCards(parsed.cards);
+              setLearningInitialized(true);
+              return;
+            }
+          }
+        } catch {
+          // ignore JSON / localStorage errors
+        }
+      }
+
+      // 2) learningSeed 변경 시에는 실제 API 호출 (3개만 요청)
+      setIsLoadingLearning(true);
+      try {
+        const cards = await generateDashboardLearningCards(3, learningSeed);
+        if (!cancelled && cards && cards.length > 0) {
+          setLearningCards(cards);
+          setLearningInitialized(true);
+          if (typeof window !== "undefined") {
+            try {
+              window.localStorage.setItem(
+                LS_LEARNING_KEY,
+                JSON.stringify({ seed: learningSeed, cards })
+              );
+            } catch {
+              // ignore localStorage failures
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Dashboard] learning cards AI error (fallback to defaults):", err);
+      } finally {
+        if (!cancelled) setIsLoadingLearning(false);
+      }
+    };
+
+    loadLearning();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [learningSeed]);
+
+  // Load / regenerate quiz questions (with localStorage cache to persist across page changes)
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const loadQuizzes = async () => {
+      // 1) 초기 한 번은 localStorage 에서 복원 시도
+      if (!quizInitialized && typeof window !== "undefined") {
+        try {
+          const stored = window.localStorage.getItem(LS_QUIZ_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as {
+              seed?: number;
+              quizzes?: DashboardQuiz[];
+              states?: Record<number, { answered: boolean; selectedIndex: number | null }>;
+              activeIndex?: number;
+            };
+            if (parsed && Array.isArray(parsed.quizzes) && parsed.quizzes.length > 0) {
+              setQuizPool(parsed.quizzes);
+              if (parsed.states) {
+                setQuizStates(parsed.states);
+              }
+              if (typeof parsed.activeIndex === "number" && parsed.activeIndex >= 0) {
+                setActiveQuizIdx(parsed.activeIndex);
+              }
+              setQuizInitialized(true);
+              return;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 2) quizSeed 변경 시에는 실제 API 호출 (3문제만 요청)
+      setIsLoadingQuiz(true);
+      try {
+        const quizzes = await generateDashboardQuizzes(3, quizSeed);
+        if (!cancelled && quizzes && quizzes.length > 0) {
+          setQuizPool(quizzes);
+          setQuizInitialized(true);
+          if (typeof window !== "undefined") {
+            try {
+              window.localStorage.setItem(
+                LS_QUIZ_KEY,
+                JSON.stringify({
+                  seed: quizSeed,
+                  quizzes,
+                  states: quizStates,
+                  activeIndex: activeQuizIdx,
+                })
+              );
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Dashboard] quizzes AI error (fallback to defaults):", err);
+      } finally {
+        if (!cancelled) setIsLoadingQuiz(false);
+      }
+    };
+
+    loadQuizzes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [quizSeed]);
+
+  // Persist quiz state (questions + answers + active index) whenever it changes
+  React.useEffect(() => {
+    if (!quizInitialized || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        LS_QUIZ_KEY,
+        JSON.stringify({
+          seed: quizSeed,
+          quizzes: quizPool,
+          states: quizStates,
+          activeIndex: activeQuizIdx,
+        })
+      );
+    } catch {
+      // ignore localStorage errors
+    }
+  }, [quizInitialized, quizSeed, quizPool, quizStates, activeQuizIdx]);
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8">
@@ -124,10 +343,10 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
         
-        {/* Total Value Card - Korean */}
+        {/* Total Value Card - KRW / Korea */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 min-w-0">
           <div className="flex items-center justify-between mb-3 gap-2">
-            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">Net Worth (한국)</h3>
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">Net Worth (KRW / Korea)</h3>
             <div className="p-1.5 bg-primary-50 text-primary-600 rounded-lg shrink-0">
               <PieChart size={16} />
             </div>
@@ -180,12 +399,25 @@ const Dashboard: React.FC = () => {
         <div className="lg:col-span-3 space-y-6">
            {/* Daily 5-Minute Learning Section */}
           <div>
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-4">
-              <BookOpen className="text-primary-600" size={24} />
-              Daily 5-Minute Learning
-            </h2>
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <BookOpen className="text-primary-600" size={24} />
+                Daily 5-Minute Learning
+              </h2>
+              <button
+                type="button"
+                onClick={() => setLearningSeed((v) => v + 1)}
+                className="px-3 py-1.5 rounded-xl bg-white border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-1 transition-colors"
+              >
+                <RefreshCw size={14} className={isLoadingLearning ? "animate-spin" : ""} />
+                <span>Regenerate</span>
+              </button>
+            </div>
+            {isLoadingLearning && (
+              <p className="text-xs text-gray-400 mb-2">Loading learning cards from AI...</p>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {LEARNING_CARDS.map(card => (
+              {learningCards.map(card => (
                 <button
                   key={card.id}
                   onClick={() => setSelectedCard(card)}
@@ -208,59 +440,173 @@ const Dashboard: React.FC = () => {
 
           {/* Daily Quiz Section */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="p-6 bg-gradient-to-r from-indigo-500 to-primary-600 text-white flex items-center gap-3">
+              <div className="p-6 bg-gradient-to-r from-indigo-500 to-primary-600 text-white flex items-center gap-3">
               <div className="p-2 bg-white/20 rounded-lg">
                 <GraduationCap size={24} />
               </div>
               <div>
                 <h2 className="text-xl font-bold">Daily Financial Quiz</h2>
-                <p className="text-indigo-100 text-sm">Test your knowledge with today's question!</p>
+                <p className="text-indigo-100 text-sm">
+                  Questions are generated by AI. Click the button to get a new set.
+                </p>
               </div>
+              <button
+                type="button"
+                onClick={() => setQuizSeed((v) => v + 1)}
+                className="ml-auto px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold flex items-center gap-1 transition-colors"
+              >
+                <RefreshCw size={14} className={isLoadingQuiz ? "animate-spin" : ""} />
+                <span>Regenerate</span>
+              </button>
             </div>
             <div className="p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">{MOCK_DAILY_QUIZ.question}</h3>
-              <div className="space-y-3">
-                {MOCK_DAILY_QUIZ.options.map((option, index) => {
-                  let btnClass = "w-full text-left p-4 rounded-xl border-2 font-medium transition-all ";
-                  if (!quizState.answered) {
-                    btnClass += "border-gray-200 hover:border-primary-500 hover:bg-primary-50 text-gray-700";
-                  } else {
-                    if (index === MOCK_DAILY_QUIZ.correctIndex) {
-                       btnClass += "border-green-500 bg-green-50 text-green-800 font-bold";
-                    } else if (quizState.selectedIndex === index) {
-                       btnClass += "border-red-300 bg-red-50 text-red-800 opacity-70";
-                    } else {
-                       btnClass += "border-gray-100 text-gray-400 opacity-50 cursor-not-allowed";
-                    }
-                  }
+              {isLoadingQuiz && visibleQuizzes.length === 0 && (
+                <div className="text-center text-sm text-gray-500">Loading quiz questions...</div>
+              )}
+              {!isLoadingQuiz && visibleQuizzes.length > 0 && (
+                <>
+                  {(() => {
+                    const { quiz, index: quizIndex } =
+                      visibleQuizzes[activeQuizIdx % visibleQuizzes.length];
+                    const state =
+                      quizStates[quizIndex] || {
+                        answered: false,
+                        selectedIndex: null,
+                      };
+                    const isCorrect =
+                      state.answered && state.selectedIndex === quiz.correctIndex;
 
-                  return (
-                    <button
-                      key={index}
-                      onClick={() => handleQuizAnswer(index)}
-                      disabled={quizState.answered}
-                      className={btnClass}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span>{option}</span>
-                        {quizState.answered && index === MOCK_DAILY_QUIZ.correctIndex && <CheckCircle2 className="text-green-600 shrink-0 ml-2" size={20} />}
-                        {quizState.answered && quizState.selectedIndex === index && index !== MOCK_DAILY_QUIZ.correctIndex && <XCircle className="text-red-500 shrink-0 ml-2" size={20} />}
+                    return (
+                      <div key={quizIndex}>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">
+                            Question {activeQuizIdx + 1} / {visibleQuizzes.length}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActiveQuizIdx(
+                                  (prev) =>
+                                    (prev - 1 + visibleQuizzes.length) %
+                                    visibleQuizzes.length
+                                )
+                              }
+                              className="p-1.5 rounded-full bg-white border border-indigo-100 text-indigo-600 hover:bg-indigo-50 transition-colors"
+                            >
+                              <ChevronLeft size={18} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActiveQuizIdx(
+                                  (prev) => (prev + 1) % visibleQuizzes.length
+                                )
+                              }
+                              className="p-1.5 rounded-full bg-white border border-indigo-100 text-indigo-600 hover:bg-indigo-50 transition-colors"
+                            >
+                              <ChevronRight size={18} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <h3 className="text-lg font-bold text-gray-900 mb-4">
+                          {quiz.question}
+                        </h3>
+                        <div className="space-y-3">
+                          {quiz.options.map((option, optionIdx) => {
+                            let btnClass =
+                              "w-full text-left p-4 rounded-xl border-2 font-medium transition-all ";
+                            if (!state.answered) {
+                              btnClass +=
+                                "border-gray-200 hover:border-primary-500 hover:bg-primary-50 text-gray-700";
+                            } else {
+                              if (optionIdx === quiz.correctIndex) {
+                                btnClass +=
+                                  "border-green-500 bg-green-50 text-green-800 font-bold";
+                              } else if (state.selectedIndex === optionIdx) {
+                                btnClass +=
+                                  "border-red-300 bg-red-50 text-red-800 opacity-70";
+                              } else {
+                                btnClass +=
+                                  "border-gray-100 text-gray-400 opacity-50 cursor-not-allowed";
+                              }
+                            }
+
+                            return (
+                              <button
+                                key={optionIdx}
+                                onClick={() =>
+                                  handleQuizAnswer(quizIndex, optionIdx)
+                                }
+                                disabled={state.answered}
+                                className={btnClass}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span>{option}</span>
+                                  {state.answered &&
+                                    optionIdx === quiz.correctIndex && (
+                                      <CheckCircle2
+                                        className="text-green-600 shrink-0 ml-2"
+                                        size={20}
+                                      />
+                                    )}
+                                  {state.answered &&
+                                    state.selectedIndex === optionIdx &&
+                                    optionIdx !== quiz.correctIndex && (
+                                      <XCircle
+                                        className="text-red-500 shrink-0 ml-2"
+                                        size={20}
+                                      />
+                                    )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Quiz Explanation */}
+                        {state.answered && (
+                          <div
+                            className={`mt-4 p-4 rounded-xl animate-in fade-in slide-in-from-top-2 ${
+                              isCorrect
+                                ? "bg-green-50 border border-green-100"
+                                : "bg-indigo-50 border border-indigo-100"
+                            }`}
+                          >
+                            <p
+                              className={`font-bold mb-1 ${
+                                isCorrect ? "text-green-800" : "text-indigo-800"
+                              }`}
+                            >
+                              {isCorrect ? "🎉 Correct!" : "💡 Learning Opportunity"}
+                            </p>
+                            <p className="text-gray-700 text-sm leading-relaxed">
+                              {quiz.explanation}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
+                    );
+                  })()}
 
-              {/* Quiz Explanation */}
-              {quizState.answered && (
-                <div className={`mt-6 p-4 rounded-xl animate-in fade-in slide-in-from-top-2 ${quizState.isCorrect ? 'bg-green-50 border border-green-100' : 'bg-indigo-50 border border-indigo-100'}`}>
-                  <p className={`font-bold mb-1 ${quizState.isCorrect ? 'text-green-800' : 'text-indigo-800'}`}>
-                    {quizState.isCorrect ? '🎉 Correct!' : '💡 Learning Opportunity'}
-                  </p>
-                  <p className="text-gray-700 text-sm leading-relaxed">
-                    {MOCK_DAILY_QUIZ.explanation}
-                  </p>
-                </div>
+                  {/* 슬라이드용 인디케이터 점 */}
+                  <div className="mt-6 flex items-center justify-center gap-2">
+                    {visibleQuizzes.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setActiveQuizIdx(i)}
+                        className={`h-2.5 w-2.5 rounded-full transition-colors ${
+                          i === activeQuizIdx
+                            ? "bg-indigo-600"
+                            : "bg-indigo-100 hover:bg-indigo-200"
+                        }`}
+                        aria-label={`Go to question ${i + 1}`}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>

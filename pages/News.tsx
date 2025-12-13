@@ -9,6 +9,7 @@ const News: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
   const [analyzingSentiment, setAnalyzingSentiment] = useState<Set<string>>(new Set());
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   const formatDate = (timestamp: number) => {
     if (!timestamp) return 'Recently';
@@ -26,19 +27,26 @@ const News: React.FC = () => {
     return date.toLocaleDateString();
   };
 
-  const fetchNews = async () => {
+  const fetchNews = async (symbol?: string) => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://localhost:5002/api/news');
+      const trimmed = symbol?.trim();
+      const url = trimmed
+        ? `http://localhost:5002/api/news?symbol=${encodeURIComponent(trimmed)}`
+        : 'http://localhost:5002/api/news';
+
+      const res = await fetch(url);
       if (!res.ok) {
         throw new Error('Failed to fetch news');
       }
       const data = await res.json();
       if (data.news && Array.isArray(data.news)) {
         // 날짜 포맷팅 및 기본 impact 설정
-        // 중복 ID 제거를 위해 Set 사용
+        // 중복 ID / 중복 기사(제목+출처 기준) 제거
         const seenIds = new Set<string>();
+        const seenTitleSource = new Set<string>();
+
         const formattedNews = data.news
           .map((item: any, index: number) => {
             // 고유한 ID 생성
@@ -48,13 +56,37 @@ const News: React.FC = () => {
               newsId = `${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`;
             }
             seenIds.add(newsId);
-            
+
+            const rawSymbols = Array.isArray(item.related_symbols) ? item.related_symbols : [];
+            const cleanedSymbols = Array.from(
+              new Set(
+                rawSymbols
+                  .map((s: string) => (s || '').trim())
+                  .filter(Boolean)
+                  .map((s: string) =>
+                    /^[a-zA-Z0-9.]+$/.test(s) ? s.toUpperCase() : s
+                  )
+              )
+            );
+
             return {
               ...item,
               date: item.date ? formatDate(item.date) : 'Recently',
               id: newsId,
-              impact: item.impact || 'neutral'
+              impact: item.impact || 'neutral',
+              related_symbols: cleanedSymbols,
             };
+          })
+          .filter((item: NewsItem) => {
+            const titleKey = (item.title || '').trim().toLowerCase();
+            const sourceKey = (item.source || '').trim().toLowerCase();
+            if (!titleKey) return false;
+            const composite = `${titleKey}|${sourceKey}`;
+            if (seenTitleSource.has(composite)) {
+              return false;
+            }
+            seenTitleSource.add(composite);
+            return true;
           });
         setNews(formattedNews);
         
@@ -133,6 +165,41 @@ const News: React.FC = () => {
     fetchNews();
   }, []);
 
+  const handleSearch = async () => {
+    const trimmed = searchTerm.trim();
+    if (!trimmed) {
+      fetchNews();
+      return;
+    }
+
+    // 1차: 백엔드 /api/search 를 통해 회사명/티커 검색 → 심볼 얻기
+    try {
+      const res = await fetch(
+        `http://localhost:5002/api/search?query=${encodeURIComponent(trimmed)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const first = (data.results || [])[0];
+        if (first && first.symbol) {
+          fetchNews(first.symbol);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('News symbol search error:', e);
+    }
+
+    // 2차: 검색어를 그대로 심볼로 간주 (티커 직접 입력용)
+    fetchNews(trimmed.toUpperCase());
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSearch();
+    }
+  };
+
   const getImpactIcon = (impact: string) => {
     switch (impact) {
       case 'positive': return <TrendingUp className="text-green-500" size={20} />;
@@ -151,22 +218,34 @@ const News: React.FC = () => {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-8">
-      <div className="flex justify-between items-start">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900 flex items-center gap-2">
             <Newspaper className="text-primary-600" size={28} />
-            Market News & Reports
+            Market News &amp; Reports
           </h1>
           <p className="text-gray-600 mt-1">Stay updated with the latest market news affecting your virtual portfolio.</p>
         </div>
-        <button
-          onClick={fetchNews}
-          disabled={isLoading}
-          className="px-4 py-2 bg-primary-600 text-white rounded-xl font-bold hover:bg-primary-700 transition-colors disabled:opacity-50 flex items-center gap-2"
-        >
-          <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="w-full md:w-auto flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+          <div className="relative flex-1 min-w-[200px]">
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search news by ticker or company (e.g. AAPL, Tesla, 005930)"
+              className="w-full px-3 py-2 pr-10 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
+            />
+          </div>
+          <button
+            onClick={handleSearch}
+            disabled={isLoading}
+            className="px-4 py-2 bg-primary-600 text-white rounded-xl font-bold hover:bg-primary-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            {searchTerm.trim() ? 'Search' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {isLoading && (

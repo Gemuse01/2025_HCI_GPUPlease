@@ -15,15 +15,14 @@ const apiKey = import.meta.env.VITE_API_KEY as string;
 const hasApiKey = apiKey && apiKey.trim().length > 0;
 const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
 
-// 외부 감성분석 API (mlapi.run) 설정 - OpenAI 호환 프록시
-// 기본 예시: base_url = "https://mlapi.run/abc-1234-xyz/v1"
-const mlapiBaseUrl =
-  (import.meta.env.VITE_MLAPI_BASE_URL as string | undefined) ||
-  "https://mlapi.run/abc-1234-xyz/v1";
-const SENTIMENT_API_URL = `${mlapiBaseUrl}/chat/completions`;
-// 실제 키는 .env.local 에 VITE_SENTIMENT_API_KEY 로 저장 (교수님이 주신 커스텀 API KEY / JWT)
-const sentimentApiKey = import.meta.env
-  .VITE_SENTIMENT_API_KEY as string | undefined;
+// GPT (mlapi.run) base URL & key for dashboard content generation
+const mlBaseUrl = (import.meta.env.VITE_MLAPI_BASE_URL as string | undefined)?.replace(
+  /\/+$/,
+  ""
+);
+const mlApiKey = import.meta.env.VITE_SENTIMENT_API_KEY as string | undefined;
+
+// (구) 외부 감성분석 직접 호출은 제거하고, 백엔드 프록시 (/api/news-sentiment) 를 사용
 
 function model(name = "gemini-2.5-flash") {
   if (!genAI) {
@@ -159,6 +158,62 @@ async function generateWithRetry(
   throw toUserFacingError(lastErr);
 }
 
+async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
+  if (!mlBaseUrl || !mlApiKey) {
+    throw new Error(
+      "GPT sentiment API is not configured. Please set VITE_MLAPI_BASE_URL and VITE_SENTIMENT_API_KEY in .env.local"
+    );
+  }
+
+  const res = await fetch(`${mlBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${mlApiKey}`,
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-5-nano",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      max_completion_tokens: maxTokens,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+  }
+
+  const data: any = await res.json();
+  const choice = data?.choices?.[0];
+  if (!choice) {
+    throw new Error("Empty GPT response.");
+  }
+
+  const content = choice?.message?.content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (!trimmed) throw new Error("Empty GPT response content.");
+    return trimmed;
+  }
+
+  // content 가 배열(part) 형태일 가능성도 방어
+  if (Array.isArray(content)) {
+    const joined = content
+      .map((part: any) => (typeof part === "string" ? part : String(part?.text || "")))
+      .join("")
+      .trim();
+    if (!joined) throw new Error("Empty GPT response content.");
+    return joined;
+  }
+
+  throw new Error("Unsupported GPT response format.");
+}
+
 /* -----------------------------
  * Public APIs
  * ----------------------------- */
@@ -253,6 +308,126 @@ Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a pe
     return out;
   } catch (err) {
     // IMPORTANT: Throw so Diary.tsx can stop spinner in finally (no infinite loading)
+    throw toUserFacingError(err);
+  }
+};
+
+/* -----------------------------
+ * Dashboard: 5‑minute learning & quizzes
+ * ----------------------------- */
+
+export type LearningCard = {
+  id: number;
+  title: string;
+  duration: string;
+  category: string;
+  content: string;
+};
+
+export type DashboardQuiz = {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+};
+
+export const generateDashboardLearningCards = async (
+  count: number = 3,
+  seed?: number
+): Promise<LearningCard[]> => {
+  const safeCount = Math.max(1, Math.min(12, Math.floor(count))); // 1~12 cards per request
+  const params = new URLSearchParams();
+  params.set("count", String(safeCount));
+  if (typeof seed === "number") params.set("seed", String(seed));
+
+  try {
+    const res = await fetch(`http://localhost:5002/api/dashboard-learning?${params.toString()}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Dashboard learning HTTP error ${res.status}: ${body || "<empty>"}`);
+    }
+    const data: any = await res.json();
+    const rawCards = data?.cards;
+    if (!Array.isArray(rawCards) || rawCards.length === 0) {
+      throw new Error("Backend returned empty learning cards array.");
+    }
+
+    const cards: LearningCard[] = [];
+    rawCards.forEach((item: any) => {
+      if (!item || typeof item !== "object") return;
+      const title = String(item.title || "").trim();
+      const duration = String(item.duration || "5 min").trim();
+      const category = String(item.category || "Learning").trim();
+      const content = String(item.content || "").trim();
+      if (!title || !content) return;
+      cards.push({
+        id: Number(item.id) || cards.length + 1,
+        title,
+        duration,
+        category,
+        content,
+      });
+    });
+
+    if (!cards.length) {
+      throw new Error("No valid learning cards extracted from backend output.");
+    }
+
+    return cards;
+  } catch (err) {
+    throw toUserFacingError(err);
+  }
+};
+
+export const generateDashboardQuizzes = async (
+  count: number = 3,
+  seed?: number
+): Promise<DashboardQuiz[]> => {
+  const safeCount = Math.max(1, Math.min(20, Math.floor(count))); // 1~20 questions per request
+  const params = new URLSearchParams();
+  params.set("count", String(safeCount));
+  if (typeof seed === "number") params.set("seed", String(seed));
+
+  try {
+    const res = await fetch(`http://localhost:5002/api/dashboard-quizzes?${params.toString()}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Dashboard quizzes HTTP error ${res.status}: ${body || "<empty>"}`);
+    }
+    const data: any = await res.json();
+    const rawQuizzes = data?.quizzes;
+    if (!Array.isArray(rawQuizzes) || rawQuizzes.length === 0) {
+      throw new Error("Backend returned empty quizzes array.");
+    }
+
+    const quizzes: DashboardQuiz[] = [];
+    rawQuizzes.forEach((q: any) => {
+      if (!q || typeof q !== "object") return;
+      const question = String(q.question || "").trim();
+      const options = Array.isArray(q.options)
+        ? q.options.map((o: any) => String(o || "").trim()).filter(Boolean)
+        : [];
+      const correctIndex = Number.isInteger(q.correctIndex) ? Number(q.correctIndex) : -1;
+      const explanation = String(q.explanation || "").trim();
+
+      if (!question || options.length !== 4) return;
+      if (correctIndex < 0 || correctIndex > 3) return;
+      if (!explanation) return;
+
+      quizzes.push({
+        question,
+        options,
+        correctIndex,
+        explanation,
+      });
+    });
+
+    if (!quizzes.length) {
+      throw new Error("No valid quizzes extracted from backend output.");
+    }
+
+    return quizzes;
+  } catch (err) {
     throw toUserFacingError(err);
   }
 };
@@ -465,135 +640,44 @@ export const analyzeNewsSentiment = async (
   summary: string,
   relatedSymbols: string[]
 ): Promise<Sentiment> => {
-  const text = `${title} ${summary}`.trim();
-
-  // 키가 없으면 LLM 호출을 생략하고 안전한 기본값(neutral) 사용
-  if (!sentimentApiKey) {
-    console.warn(
-      "[Sentiment] VITE_SENTIMENT_API_KEY not set. Falling back to neutral sentiment."
-    );
-    return "neutral";
-  }
-
   try {
-    // OpenAI 호환 프록시 엔드포인트 (/v1/chat/completions)
-    const res = await fetch(SENTIMENT_API_URL, {
+    // 백엔드 프록시 (/api/news-sentiment) 를 호출해서 감성 레이블만 받아옴
+    const res = await fetch("http://localhost:5002/api/news-sentiment", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${sentimentApiKey}`,
       },
       body: JSON.stringify({
-        model: "openai/gpt-5-nano",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a financial news sentiment classifier. " +
-              "Read the news headline and summary and respond ONLY with a single JSON object, no extra text. " +
-              'The JSON must have exactly one field: {"sentiment": "<label>"}, ' +
-              'where <label> is one of: "positive", "negative", or "neutral" (lowercase).',
-          },
-          {
-            role: "user",
-            content: `Title: ${title}\n\nSummary: ${summary}\n\nRelated symbols: ${
-              relatedSymbols && relatedSymbols.length > 0
-                ? relatedSymbols.join(", ")
-                : "N/A"
-            }`,
-          },
-        ],
-        // GPT-5 nano 프록시는 temperature=1 (기본값)만 지원하므로 명시하지 않음
-        // GPT-5 nano 프록시는 max_tokens 대신 max_completion_tokens 를 사용
-        max_completion_tokens: 10,
+        title,
+        summary,
+        symbols: relatedSymbols,
       }),
     });
 
     if (!res.ok) {
-      // 서버에서 내려주는 에러 메시지까지 같이 로깅해서 디버깅에 활용
       const errorBody = await res.text().catch(() => "");
       console.error(
-        "[Sentiment] API error response:",
+        "[Sentiment] /api/news-sentiment error:",
         res.status,
         errorBody || "<empty body>"
       );
-      throw new Error(`Sentiment API HTTP error: ${res.status}`);
+      throw new Error(`News sentiment HTTP error: ${res.status}`);
     }
 
     const data = await res.json();
-    console.log("[Sentiment] API raw response:", data);
-
-    // OpenAI 응답 형태 (신규 스펙): message.content 가 문자열 또는 content 파트 배열일 수 있음
-    let content: string | undefined;
-    const firstChoice = data?.choices?.[0];
-    const message = firstChoice?.message ?? firstChoice?.delta;
-
-    if (!message) {
-      // message 구조를 디버깅하기 위한 로그 (1회용으로 생각)
-      try {
-        console.log(
-          "[Sentiment] First choice (no message field found):",
-          JSON.stringify(firstChoice, null, 2)
-        );
-      } catch {
-        console.log("[Sentiment] First choice (raw):", firstChoice);
-      }
-    }
-
-    if (message) {
-      const rawContent = message.content;
-      if (typeof rawContent === "string") {
-        content = rawContent;
-      } else if (Array.isArray(rawContent)) {
-        // [{type:"text", text:{value:"positive", ...}}, ...] 등의 형태를 문자열로 병합
-        const textParts = rawContent
-          .map((part: any) => {
-            if (!part) return "";
-            if (typeof part === "string") return part;
-            if (typeof part.text === "string") return part.text;
-            if (part.type === "text" && part.text && typeof part.text.value === "string") {
-              return part.text.value;
-            }
-            return "";
-          })
-          .join(" ")
-          .trim();
-        if (textParts) {
-          content = textParts;
-        }
-      }
-    }
-
-    if (typeof content === "string" && content.trim().length > 0) {
-      const trimmed = content.trim();
-      console.log("[Sentiment] Model content:", trimmed);
-
-      // 1차 시도: JSON 으로 파싱해서 sentiment 필드 읽기
-      try {
-        const jsonPayload = JSON.parse(trimmed);
-        const parsedFromJson = parseSentimentFromApiResponse(jsonPayload);
-        if (parsedFromJson) {
-          return parsedFromJson;
-        }
-      } catch {
-        // JSON 이 아니면 아래 일반 문자열 파싱으로 진행
-      }
-
-      // 2차 시도: 문자열 자체에서 라벨 추출
-      const parsedFromText = parseSentimentFromApiResponse(trimmed);
-      if (parsedFromText) {
-        return parsedFromText;
-      }
+    const raw = String((data as any)?.sentiment || "").toLowerCase();
+    if (raw === "positive" || raw === "negative" || raw === "neutral") {
+      return raw;
     }
 
     console.warn(
-      "[Sentiment] Could not parse sentiment from API response. Falling back to neutral."
+      "[Sentiment] Unknown sentiment label from backend, falling back to neutral:",
+      raw
     );
-    // 파싱 실패 시에도 사용자 경험을 위해 중립으로 처리
     return "neutral";
   } catch (err) {
     console.error(
-      "[Sentiment] External API error, using neutral fallback:",
+      "[Sentiment] Backend sentiment error, using neutral fallback:",
       err
     );
     // 외부 API 오류 시에도 neutral 로 고정
