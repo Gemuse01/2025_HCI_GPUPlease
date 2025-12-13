@@ -8,6 +8,7 @@ import VirtualTrading from './pages/VirtualTrading';
 import AiAgent from './pages/AiAgent';
 import Diary from './pages/Diary';
 import News from './pages/News';
+import Learning from './pages/Learning';
 import Onboarding from './pages/Onboarding';
 import FloatingChat from './components/FloatingChat';
 
@@ -34,6 +35,7 @@ const AppLayout: React.FC = () => {
           <Routes>
              <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
              <Route path="/trading" element={<ProtectedRoute><VirtualTrading /></ProtectedRoute>} />
+             <Route path="/learning" element={<ProtectedRoute><Learning /></ProtectedRoute>} />
              <Route path="/news" element={<ProtectedRoute><News /></ProtectedRoute>} />
              <Route path="/agent" element={<ProtectedRoute><AiAgent /></ProtectedRoute>} />
              <Route path="/diary" element={<ProtectedRoute><Diary /></ProtectedRoute>} />

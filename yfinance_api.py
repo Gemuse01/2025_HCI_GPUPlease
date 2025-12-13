@@ -278,20 +278,18 @@ def get_news():
                             news_id = str(id_val) if id_val and not isinstance(id_val, dict) else f"{symbol}_{len(news_items)}_{hash(title)}"
                             
                             # 링크 찾기 (다양한 필드 시도)
-                            link_val = (content.get('link') or content.get('url') or content.get('canonicalUrl') or
-                                       content.get('clickThroughUrl') or content.get('clickThroughURL') or
-                                       item.get('link') or item.get('url') or item.get('canonicalUrl') or
-                                       item.get('clickThroughUrl') or item.get('clickThroughURL') or '')
-                            link = str(link_val) if link_val and not isinstance(link_val, dict) else ''
-                            
-                            # 링크가 없거나 유효하지 않으면 검색 링크로 대체 (제목으로 구글 검색)
-                            if not link or not link.startswith('http'):
-                                try:
-                                    from urllib.parse import quote_plus
-                                    query_str = quote_plus(title)
-                                    link = f"https://www.google.com/search?q={query_str}"
-                                except Exception:
-                                    link = ''
+                            raw_link_val = (
+                                content.get('link') or content.get('url') or content.get('canonicalUrl') or
+                                content.get('clickThroughUrl') or content.get('clickThroughURL') or
+                                item.get('link') or item.get('url') or item.get('canonicalUrl') or
+                                item.get('clickThroughUrl') or item.get('clickThroughURL') or ''
+                            )
+                            link = _normalize_link_value(raw_link_val)
+                            if not isinstance(link, str):
+                                link = ''
+                            # http/https 로 시작하지 않으면 버튼을 아예 숨기기 위해 빈 문자열로 처리
+                            if not link.startswith('http'):
+                                link = ''
                             
                             # 관련 심볼 처리:
                             # 1) 기본은 요청 symbol
@@ -408,7 +406,7 @@ def get_news():
 
                                 if key not in article_map:
                                     # 링크 찾기
-                                    link_val = (
+                                    raw_link_val = (
                                         content.get('link')
                                         or content.get('url')
                                         or content.get('canonicalUrl')
@@ -421,22 +419,20 @@ def get_news():
                                         or item.get('clickThroughURL')
                                         or ''
                                     )
-                                link = str(link_val) if link_val and not isinstance(link_val, dict) else ''
-                                if not link or not link.startswith('http'):
-                                    try:
-                                        from urllib.parse import quote_plus
-                                        query_str = quote_plus(title)
-                                        link = f"https://www.google.com/search?q={query_str}"
-                                    except Exception:
+                                    link = _normalize_link_value(raw_link_val)
+                                    if not isinstance(link, str):
                                         link = ''
-                                
+                                    # http/https 로 시작하지 않으면 버튼을 숨기기 위해 빈 문자열 처리
+                                    if not link.startswith('http'):
+                                        link = ''
+
                                     article_map[key] = {
                                         "id": f"{base_id}_{hash(key)}",
-                                    "title": title,
-                                    "source": publisher,
-                                    "date": pub_time,
-                                    "summary": summary,
-                                    "impact": "neutral",
+                                        "title": title,
+                                        "source": publisher,
+                                        "date": pub_time,
+                                        "summary": summary,
+                                        "impact": "neutral",
                                         "related_symbols": set(),
                                         "link": link,
                                     }
@@ -503,6 +499,32 @@ openai_client = (
     if SENTIMENT_API_KEY
     else None
 )
+
+
+def _normalize_link_value(raw):
+    """
+    Yahoo Finance 뉴스 객체 안의 링크 필드는 문자열이거나 dict일 수 있으므로,
+    여기서 최대한 실제 http(s) URL 을 뽑아낸다.
+    """
+    if not raw:
+        return ""
+    # 이미 문자열인 경우
+    if isinstance(raw, str):
+        return raw
+    # dict 인 경우 여러 키 후보에서 URL 시도
+    if isinstance(raw, dict):
+        for key in (
+            "url",
+            "webUrl",
+            "canonicalUrl",
+            "clickThroughUrl",
+            "clickThroughURL",
+            "href",
+        ):
+            val = raw.get(key)
+            if isinstance(val, str):
+                return val
+    return ""
 
 def call_openai_json(prompt: str, max_tokens: int = 800):
     """

@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, TrendingUp, Newspaper, Bot, BookHeart, X, LogOut } from 'lucide-react';
+import { LayoutDashboard, TrendingUp, Newspaper, Bot, BookHeart, GraduationCap, X, LogOut } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 
 interface SidebarProps {
@@ -15,6 +15,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, closeMobile }) => {
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Virtual Trading', href: '/trading', icon: TrendingUp },
+    { name: 'Learning', href: '/learning', icon: GraduationCap },
     { name: 'Market News', href: '/news', icon: Newspaper },
     { name: 'AI Mentor', href: '/agent', icon: Bot },
     { name: 'Trading Diary', href: '/diary', icon: BookHeart },

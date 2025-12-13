@@ -144,7 +144,7 @@ const VirtualTrading: React.FC = () => {
       const results = await searchNasdaqStocks(q);
       if (results.length === 0) {
         setSearchError(
-          '지금은 외부 주가 API 한도/오류로 검색 결과를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.'
+          "We couldn't load results from the external price API right now. This is a safe practice account, so feel free to try again in a few seconds."
         );
       } else {
         setSearchResults(results);
@@ -152,7 +152,7 @@ const VirtualTrading: React.FC = () => {
       }
     } catch (err) {
       console.error('Stock search failed:', err);
-      setSearchError('An error occurred during the search. Please try again later.');
+      setSearchError('Something went wrong while searching. Please try again in a moment — nothing here affects real money.');
     } finally {
       setIsSearching(false);
     }
@@ -213,7 +213,7 @@ const VirtualTrading: React.FC = () => {
     if (!selectedStock) return;
     const qty = Number(quantity);
     if (isNaN(qty) || qty <= 0) {
-      alert('Please enter a valid quantity.');
+      alert('Please enter a valid quantity. This is just a practice account, so feel free to test different sizes.');
       return;
     }
 
@@ -633,7 +633,7 @@ const VirtualTrading: React.FC = () => {
 
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-2">
-              Quantity {tradeType === 'SELL' && `(최대: ${getOwnedQuantity(selectedStock.symbol)})`}
+              Quantity {tradeType === 'SELL' && `(max: ${getOwnedQuantity(selectedStock.symbol)})`}
             </label>
             <input
               type="number"
@@ -658,18 +658,20 @@ const VirtualTrading: React.FC = () => {
                 ? totalCost > (portfolio?.cash_krw || 0)
                 : totalCost > (portfolio?.cash || 0);
 
-              return insufficient ? (
-                <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
-                  <AlertCircle size={18} />
-                  {isKoreanStock(selectedStock.symbol) ? 'Insufficient KRW balance.' : 'Insufficient cash balance.'}
-                </div>
-              ) : null;
+              return insufficient
+                ? (
+                  <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
+                    <AlertCircle size={18} />
+                    Not enough balance for this trade in your practice account. Try reducing the quantity — this is all risk-free.
+                  </div>
+                )
+                : null;
             })()}
 
           {tradeType === 'SELL' && Number(quantity) > getOwnedQuantity(selectedStock.symbol) && (
             <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
               <AlertCircle size={18} />
-              You can’t sell more than you hold.
+              You can’t sell more than you hold in this practice account. Lower the quantity and try again — this is how you learn your limits.
             </div>
           )}
 

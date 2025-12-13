@@ -49,13 +49,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (type === 'BUY') {
         if (isKoreanStock) {
           if (newCashKrw < totalCost) {
-            alert("Insufficient KRW balance.");
+            alert("Insufficient KRW balance in your practice account. Try a smaller size — this is a safe place to experiment.");
             return prev;
           }
           newCashKrw -= totalCost;
         } else {
           if (newCash < totalCost) {
-            alert("Insufficient virtual funds.");
+            alert("Insufficient virtual funds in your practice account. Try a smaller size — mistakes here cost nothing.");
             return prev;
           }
           newCash -= totalCost;
@@ -78,7 +78,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // SELL
         const existingAssetIndex = newAssets.findIndex(a => a.symbol === symbol);
         if (existingAssetIndex < 0 || newAssets[existingAssetIndex].quantity < quantity) {
-          alert("Insufficient assets to sell.");
+          alert("You’re trying to sell more than you hold in this practice account. Adjust the quantity and try again.");
           return prev;
         }
         

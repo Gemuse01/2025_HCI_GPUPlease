@@ -134,7 +134,7 @@ const Diary: React.FC = () => {
 
       setEntryError((prev) => ({
         ...prev,
-        [entry.id]: "AI Coach is unavailable right now. Please try again.",
+        [entry.id]: "AI Coach is unavailable right now. Please try again — your entry is still saved and valuable.",
       }));
       console.error("[Diary] AI feedback error:", err);
     } finally {
@@ -193,7 +193,9 @@ const Diary: React.FC = () => {
             <BookHeart className="text-primary-600" />
             Investment Diary
           </h1>
-          <p className="text-gray-600">Track your emotions and reasoning behind each decision.</p>
+          <p className="text-gray-600">
+            Track your emotions and reasoning behind each decision — this is a safe place to learn from mistakes.
+          </p>
         </div>
 
         <button
@@ -281,6 +283,9 @@ const Diary: React.FC = () => {
                       placeholder="Why did you make this decision? What did you learn?"
                       className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 placeholder-gray-400"
                     />
+                    <p className="mt-1 text-xs text-gray-500">
+                      This is your practice diary — entries don’t need to be perfect to be useful.
+                    </p>
                   </div>
 
                   <button
@@ -305,7 +310,7 @@ const Diary: React.FC = () => {
             </div>
             <h3 className="text-2xl font-extrabold text-gray-900 mb-3">Your diary is empty</h3>
             <p className="text-gray-500 max-w-md mx-auto mb-8 text-lg">
-              Journaling helps you spot patterns and improve decision-making over time.
+              Journaling helps you spot patterns and improve decision-making over time. Short, honest notes are enough.
             </p>
             <button
               onClick={() => setIsAdding(true)}

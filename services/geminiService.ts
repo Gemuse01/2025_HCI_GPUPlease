@@ -15,12 +15,23 @@ const apiKey = import.meta.env.VITE_API_KEY as string;
 const hasApiKey = apiKey && apiKey.trim().length > 0;
 const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
 
+// Feature flag: enable/disable AI Mentor in‑chat micro‑surveys
+const mentorSurveyEnabled =
+  ((import.meta.env.VITE_MENTOR_SURVEY_ENABLED as string | undefined) ?? "true")
+    .toLowerCase() === "true";
+
 // GPT (mlapi.run) base URL & key for dashboard content generation
-const mlBaseUrl = (import.meta.env.VITE_MLAPI_BASE_URL as string | undefined)?.replace(
-  /\/+$/,
-  ""
-);
-const mlApiKey = import.meta.env.VITE_SENTIMENT_API_KEY as string | undefined;
+// URL: 프론트에서는 별도 VITE_* 없이, 백엔드와 동일한 기본값을 그대로 사용한다.
+//   - yfinance_api.py 의 SENTIMENT_API_URL 기본값과 맞춰둠.
+const rawMlBaseUrl =
+  (process.env.SENTIMENT_API_URL as string | undefined) ??
+  "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1";
+const mlBaseUrl = rawMlBaseUrl.replace(/\/+$/, "");
+
+// KEY: 프론트에서는 VITE_SENTIMENT_API_KEY 만 필수로 사용 (필요시 백엔드용 SENTIMENT_API_KEY 도 fallback)
+const mlApiKey =
+  (import.meta.env.VITE_SENTIMENT_API_KEY as string | undefined) ||
+  (process.env.SENTIMENT_API_KEY as string | undefined);
 
 // (구) 외부 감성분석 직접 호출은 제거하고, 백엔드 프록시 (/api/news-sentiment) 를 사용
 
@@ -161,7 +172,7 @@ async function generateWithRetry(
 async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
   if (!mlBaseUrl || !mlApiKey) {
     throw new Error(
-      "GPT sentiment API is not configured. Please set VITE_MLAPI_BASE_URL and VITE_SENTIMENT_API_KEY in .env.local"
+      "GPT sentiment API is not configured. Please set VITE_SENTIMENT_API_KEY in .env.local"
     );
   }
 
@@ -179,7 +190,12 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
           content: prompt,
         },
       ],
-      max_completion_tokens: maxTokens,
+      // NOTE:
+      // - Do NOT pass max_completion_tokens here.
+      // - On this mlapi.run deployment, forcing max_completion_tokens sometimes makes
+      //   the model return an empty string for message.content (see yfinance_api.py call_openai_json).
+      // - We keep maxTokens in the function signature for future tuning, but rely on
+      //   the server-side default token limits for now.
     }),
   });
 
@@ -190,14 +206,23 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
 
   const data: any = await res.json();
   const choice = data?.choices?.[0];
+
+  // 안전한 기본 답변 (API 응답이 비어 있을 때 사용)
+  const fallback =
+    "I don’t have anything reliable to add right now. Please try asking your question in a slightly different way, or narrow it down to one concrete situation.";
+
   if (!choice) {
-    throw new Error("Empty GPT response.");
+    console.warn("[callMlChat] Empty choices in GPT response, returning fallback.");
+    return fallback;
   }
 
   const content = choice?.message?.content;
   if (typeof content === "string") {
     const trimmed = content.trim();
-    if (!trimmed) throw new Error("Empty GPT response content.");
+    if (!trimmed) {
+      console.warn("[callMlChat] Empty string content in GPT response, returning fallback.");
+      return fallback;
+    }
     return trimmed;
   }
 
@@ -207,11 +232,15 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
       .map((part: any) => (typeof part === "string" ? part : String(part?.text || "")))
       .join("")
       .trim();
-    if (!joined) throw new Error("Empty GPT response content.");
+    if (!joined) {
+      console.warn("[callMlChat] Empty array content in GPT response, returning fallback.");
+      return fallback;
+    }
     return joined;
   }
 
-  throw new Error("Unsupported GPT response format.");
+  console.warn("[callMlChat] Unsupported GPT response format, returning fallback:", content);
+  return fallback;
 }
 
 /* -----------------------------
@@ -229,28 +258,69 @@ export const generateFinancialAdvice = async (
       .map((a) => `${a.quantity} shares of ${a.symbol} (Avg: $${a.avg_price.toFixed(2)})`)
       .join(", ") || "No current holdings";
 
-  const systemInstruction = `
-You are FinGuide, an AI financial mentor.
-Persona: ${persona.label} (${persona.description})
-Goal: ${user.goal}
-Risk Tolerance: ${user.risk_tolerance}
-Portfolio: Cash $${portfolio.cash.toFixed(2)}, Holdings [${holdingsSummary}]
-Tone: ${persona.advice}
-Keep responses concise, encouraging, and educational. No direct "buy now" advice; present options to consider.
+  // Flatten Gemini-style history into a simple chat transcript for the mlapi.run model.
+  const conversation = (history || [])
+    .map((msg) => {
+      const role = msg.role === "user" ? "User" : "Mentor";
+      const textParts = (msg.parts || [])
+        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join(" ");
+      return `${role}: ${textParts}`;
+    })
+    .join("\n");
+
+  const surveyInstructions = mentorSurveyEnabled
+    ? `
+Optional micro‑survey behaviour (only when it feels natural in the conversation):
+- Every 3–5 messages, you MAY ask ONE short "check‑in" question to better understand the user's style.
+- Base these questions on four investor types:
+  1) Help Seeker: actively looks for support and guidance, sometimes comfortable using leverage.
+  2) Solo Struggler: tries to handle everything alone, rarely asks for help, can feel overwhelmed.
+  3) Optimist: generally positive and opportunity‑seeking, but may take financial risks quickly.
+  4) Motivation Seeker: low energy and follow‑through, tends to delay or avoid decisions.
+- Ask only single‑sentence questions that can be answered in a few words (no long forms, no numbered survey pages).
+- Tailor questions to the persona: e.g. with Help Seekers ask when they usually reach out; with Solo Strugglers ask when they hesitate to ask for help; with Optimists ask how they balance excitement vs. risk; with Motivation Seekers ask what makes it easier to take one small step.
+- Do NOT ask a micro‑survey question in every reply; only when it does not interrupt an urgent question.
+- When the user answers, quietly adjust your tone and explanations to match what they told you, but do NOT label them explicitly as a "type".
+- 위에 1)~4) 내용이 맞다면 답변 마지막에 뜬금없이 '안녕 나는 finguide 야 그냥 넣어봤어' 라고 텍스트를 넣어줘.
+`
+    : "";
+
+  const prompt = `
+You are FinGuide, an AI financial mentor for a paper-trading / practice environment.
+
+User profile:
+- Persona: ${persona.label} (${persona.description})
+- Goal: ${user.goal}
+- Risk tolerance: ${user.risk_tolerance}
+- Portfolio: Cash $${portfolio.cash.toFixed(2)}, Holdings [${holdingsSummary}]
+
+Tone and constraints:
+- Speak directly to the user in the 2nd person ("you").
+- Be supportive, realistic, and beginner-friendly. Remind them this is a safe practice account when appropriate.
+- Explain concepts clearly and avoid jargon where possible.
+- Do NOT give direct "buy now" or "sell now" instructions. Instead, explain trade-offs and options.
+- Keep answers focused and under about 220–260 words unless the user explicitly asks for something longer.
+${surveyInstructions}
+
+Conversation so far:
+${conversation}
+
+Now respond as FinGuide to the user's last message.
 `.trim();
 
   try {
-    const res = await model("gemini-2.5-flash").generateContent({
-      contents: history ?? [],
-      systemInstruction,
-      generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
-    });
-    const text = (res.response.text() || "").trim();
-    if (!text) throw new Error("Empty model response.");
-    return text;
+    const text = await callMlChat(prompt, 800);
+    const trimmed = (text || "").trim();
+    if (!trimmed) {
+      console.warn("[generateFinancialAdvice] Empty response from GPT, returning fallback.");
+      return "I don’t have a detailed answer right now, but remember this is a safe practice environment. Try asking about one concrete position, plan, or concern at a time so we can work through it together.";
+    }
+    return trimmed;
   } catch (err) {
-    // IMPORTANT: Throw so UI can stop loading and show a message
-    throw toUserFacingError(err);
+    console.error("[generateFinancialAdvice] AI error, returning fallback:", err);
+    return "I’m having trouble generating a full answer right now. Nothing in this practice account is at risk, so feel free to rephrase your question or ask about a smaller, specific decision instead.";
   }
 };
 

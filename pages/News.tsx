@@ -90,28 +90,23 @@ const News: React.FC = () => {
           });
         setNews(formattedNews);
         
-        // 각 뉴스에 대해 감성분석 수행 (비동기, rate limiting 적용)
-        // 무료 티어는 분당 10개 요청 제한이 있으므로 최대 5개만 분석 (안전 마진)
-        const maxAnalysisCount = 5;
-        const newsToAnalyze = formattedNews.slice(0, maxAnalysisCount);
-        
+        // 각 뉴스에 대해 감성분석 수행 (비동기)
+        // 예전에는 무료 티어 rate limit 때문에 5개만 분석했지만,
+        // 지금은 백엔드에서 에러를 neutral 로 처리하므로 모든 뉴스에 대해 시도한다.
+        const newsToAnalyze = formattedNews;
+
         newsToAnalyze.forEach((item: NewsItem, index: number) => {
-          // 각 요청 사이에 13초 딜레이 (분당 10개 = 6초 간격, 여유를 두고 13초)
-          // 첫 번째는 즉시, 두 번째는 13초 후, 세 번째는 26초 후...
+          // 너무 많은 동시 요청을 피하기 위해 약간의 간격만 둠 (2초 간격)
           setTimeout(() => {
             analyzeNewsItem(item);
-          }, index * 13000);
+          }, index * 2000);
         });
-        
-        if (formattedNews.length > maxAnalysisCount) {
-          console.log(`[Sentiment] Analyzing only first ${maxAnalysisCount} news items due to API rate limits (10 requests/minute).`);
-        }
       } else {
         setNews([]);
       }
     } catch (err) {
       console.error('News fetch error:', err);
-      setError('뉴스를 불러오는 중 오류가 발생했습니다.');
+      setError('We could not load news just now. Please try again in a moment — your practice data is safe.');
       setNews([]);
     } finally {
       setIsLoading(false);
@@ -251,7 +246,9 @@ const News: React.FC = () => {
       {isLoading && (
         <div className="text-center p-8 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
           <RefreshCw size={32} className="mx-auto mb-2 opacity-50 animate-spin" />
-          <p className="font-medium text-gray-500">Loading news...</p>
+          <p className="font-medium text-gray-500">
+            Fetching news for your practice environment. This usually takes 1–2 seconds.
+          </p>
         </div>
       )}
 
