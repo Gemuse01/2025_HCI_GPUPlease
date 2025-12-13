@@ -30,3 +30,17 @@ dist
 .env.*
 !.env.example
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.finAI/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+

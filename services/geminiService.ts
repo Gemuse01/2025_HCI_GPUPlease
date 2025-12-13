@@ -1,10 +1,16 @@
 // services/geminiService.ts
 import { GoogleGenerativeAI, type Content } from "@google/generative-ai";
-import { UserProfile, Portfolio, MarketCondition, DiaryEntry } from "../types";
-import { PERSONA_DETAILS, MOCK_STOCKS } from "../constants";
+import type { UserProfile, Portfolio, DiaryEntry } from "../types";
+import { PERSONA_DETAILS } from "../constants";
 
-// Vite: 공개 환경변수는 VITE_* 만 주입됨 (데모/수업용)
-// 배포 전 .env.local 과 Vercel 환경변수에 VITE_API_KEY를 설정하세요.
+/**
+ * NOTE
+ * - This file is written to NEVER cause infinite loading in UI:
+ *   → It always throws errors quickly with a user-readable message.
+ * - UI must wrap calls with try/catch/finally and always clear loading in finally.
+ */
+
+// Vite: only VITE_* env vars are exposed to client
 const apiKey = import.meta.env.VITE_API_KEY as string;
 const hasApiKey = apiKey && apiKey.trim().length > 0;
 const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
@@ -19,60 +25,143 @@ const SENTIMENT_API_URL = `${mlapiBaseUrl}/chat/completions`;
 const sentimentApiKey = import.meta.env
   .VITE_SENTIMENT_API_KEY as string | undefined;
 
-// 공통: 단일/대화 모델 핸들러
-function model(name = "gemini-pro") {
+function model(name = "gemini-2.5-flash") {
   if (!genAI) {
     throw new Error("Gemini API key is not configured. Please set VITE_API_KEY in .env.local");
   }
   return genAI.getGenerativeModel({ model: name });
 }
 
-// 감성 분석 전용 모델 (별도로 분리하여 다른 기능에 영향 없도록)
-function sentimentModel() {
-  if (!genAI) {
-    throw new Error(
-      "Gemini API key is not configured. Please set VITE_API_KEY in .env.local"
-    );
-  }
-  // 감성 분석 전용으로 gemini-pro 사용 (안정적)
-  return genAI.getGenerativeModel({ model: "gemini-pro" });
+/* -----------------------------
+ * Utilities
+ * ----------------------------- */
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-export const getStockAnalysis = async (
-  symbol: string,
-  marketCondition: MarketCondition,
-  riskTolerance: string
-): Promise<string> => {
-  const stock = MOCK_STOCKS.find((s) => s.symbol === symbol);
-  const stockName = stock ? stock.name : symbol;
+// Try to parse Gemini "Please retry in XXs." hints.
+function parseRetryAfterSeconds(err: any): number | null {
+  const msg = String(err?.message || err);
+  // "Please retry in 34.78s."
+  const m = msg.match(/retry in\s+([0-9.]+)s/i);
+  if (!m?.[1]) return null;
+  const sec = Number(m[1]);
+  if (!Number.isFinite(sec) || sec <= 0) return null;
+  return Math.ceil(sec);
+}
 
-  const prompt = `
-Act as a senior financial analyst. Give a concise 3-bullet analysis of ${stockName} (${symbol})
-for an investor with ${riskTolerance} risk tolerance.
+function isRateLimitOrQuota(err: any): boolean {
+  const msg = String(err?.message || err);
+  const low = msg.toLowerCase();
+  return (
+    msg.includes("429") ||
+    low.includes("quota") ||
+    low.includes("rate limit") ||
+    low.includes("rate-limit") ||
+    low.includes("too many requests")
+  );
+}
 
-Current simulated market: ${marketCondition}.
-Stock details: Sector: ${stock?.sector}, Volatility: ${stock?.volatility}, Recent Change: ${stock?.change_pct}%.
-Format exactly:
-**Snapshot**: [one sentence]
-• **Strength**: [...]
-• **Risk**: [...]
-• **Verdict**: [Buy/Hold/Sell]
-`.trim();
+function isOverloadedOrTransient(err: any): boolean {
+  const msg = String(err?.message || err);
+  const low = msg.toLowerCase();
+  return (
+    msg.includes("503") ||
+    low.includes("overloaded") ||
+    low.includes("timeout") ||
+    low.includes("network") ||
+    msg.includes("500") ||
+    msg.includes("502") ||
+    msg.includes("504")
+  );
+}
 
-  try {
-    const res = await model().generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
-    });
-    return res.response.text();
-  } catch (err) {
-    console.error("Gemini Analysis Error:", err);
-    return `**Snapshot**: ${stockName} shows mixed signals in a ${marketCondition.toLowerCase()} market.
-• **Strength**: Solid historical performance within its sector.
-• **Risk**: Short-term volatility remains elevated.
-• **Verdict**: HOLD for now and monitor closely.`;
+/**
+ * Normalize errors to a message your UI can show.
+ * IMPORTANT: We intentionally keep "429" in the message so UI can detect it.
+ */
+function toUserFacingError(err: any): Error {
+  const msg = String(err?.message || err);
+
+  // If Gemini tells you retry time, keep it.
+  if (isRateLimitOrQuota(err)) {
+    const sec = parseRetryAfterSeconds(err) ?? 60;
+    return new Error(`429: Rate limited. Please retry in ${sec}s.`);
   }
-};
+
+  if (isOverloadedOrTransient(err)) {
+    return new Error("503: The AI service is temporarily overloaded. Please try again soon.");
+  }
+
+  // Unknown
+  return new Error(`AI_ERROR: ${msg}`);
+}
+
+function looksCutOff(text: string, minChars = 80) {
+  const t = (text || "").trim();
+  if (!t) return true;
+  if (t.length < minChars) return true;
+  // if it doesn't end like a finished sentence, might be cut off
+  if (!/[.!?]["')\]]?$/.test(t)) return true;
+  return false;
+}
+
+/* -----------------------------
+ * Core generator with safe retry
+ * ----------------------------- */
+async function generateWithRetry(
+  prompt: string,
+  opts?: { maxTokens?: number; temperature?: number; maxRetries?: number }
+): Promise<string> {
+  const maxOutputTokens = opts?.maxTokens ?? 320;
+  const temperature = opts?.temperature ?? 0.6;
+
+  // Keep retries LOW to avoid burning quota (and triggering more 429s).
+  const maxRetries = opts?.maxRetries ?? 1; // 0 or 1 is usually best on client
+
+  let lastErr: any = null;
+
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      const res = await model("gemini-2.5-flash").generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature, maxOutputTokens },
+      });
+
+      const text = (res.response.text() || "").trim();
+      if (!text) throw new Error("Empty model response.");
+      return text;
+    } catch (err) {
+      lastErr = err;
+
+      // If rate-limited, do NOT keep retrying many times.
+      if (isRateLimitOrQuota(err)) {
+        // Optional: wait a tiny bit once, but don't loop.
+        if (i < maxRetries) {
+          const sec = parseRetryAfterSeconds(err);
+          const waitMs = sec ? Math.min(sec * 1000, 1200) : 600;
+          await sleep(waitMs);
+          continue;
+        }
+        throw toUserFacingError(err);
+      }
+
+      // transient overload: allow small backoff retry
+      if (isOverloadedOrTransient(err) && i < maxRetries) {
+        await sleep(450 + i * 250);
+        continue;
+      }
+
+      throw toUserFacingError(err);
+    }
+  }
+
+  throw toUserFacingError(lastErr);
+}
+
+/* -----------------------------
+ * Public APIs
+ * ----------------------------- */
 
 export const generateFinancialAdvice = async (
   history: Content[],
@@ -96,44 +185,75 @@ Keep responses concise, encouraging, and educational. No direct "buy now" advice
 `.trim();
 
   try {
-    const res = await model().generateContent({
+    const res = await model("gemini-2.5-flash").generateContent({
       contents: history ?? [],
       systemInstruction,
       generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
     });
-    return res.response.text();
+    const text = (res.response.text() || "").trim();
+    if (!text) throw new Error("Empty model response.");
+    return text;
   } catch (err) {
-    console.error("Gemini Chat Error:", err);
-    return "I'm having trouble reaching the model right now. Please try again in a moment.";
+    // IMPORTANT: Throw so UI can stop loading and show a message
+    throw toUserFacingError(err);
   }
 };
 
 export const generateDiaryFeedback = async (
   entry: DiaryEntry,
-  user: UserProfile
+  user: UserProfile,
+  recentTxs: any[] = [],
+  recentDiaryLite: any[] = []
 ): Promise<string> => {
   const persona = PERSONA_DETAILS[user.persona];
 
-  const prompt = `
-As a trading psychology coach, give brief (2–3 sentences) feedback.
+  // Keep context small to reduce token usage (less likely to hit quota)
+  const compactTxs = (recentTxs || []).slice(0, 12);
+  const compactDiary = (recentDiaryLite || []).slice(0, 8);
 
+  const basePrompt = `
+You are a practical trading coach speaking directly to the user.
+Write in a supportive, realistic tone. No price predictions. No buy/sell calls.
+
+Style rules:
+- Use 2nd person ("you").
+- Exactly 4 sentences, under 90 words total.
+- No bullet points.
+- End the final sentence with a period.
+
+Context:
 Persona: ${persona.label}
 Emotion: ${entry.emotion}
 Driver: ${entry.reason}
-Note: "${entry.note}"
-
-Goal: Help them spot patterns (FOMO, revenge trading, or good discipline). Be encouraging and insightful.
+Ticker: ${entry.related_symbol || "N/A"}
+Note: "${(entry.note || "").slice(0, 800)}"
+Recent transactions (latest first): ${JSON.stringify(compactTxs)}
+Recent diary patterns: ${JSON.stringify(compactDiary)}
 `.trim();
 
   try {
-    const res = await model().generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 300 },
-    });
-    return res.response.text() || "Good job reflecting on your trade. Consistency is key!";
+    // ✅ maxRetries=1 (kept low to avoid quota burn)
+    let text = await generateWithRetry(basePrompt, { maxTokens: 220, temperature: 0.6, maxRetries: 1 });
+
+    // If looks cut off, ONE rewrite attempt (still maxRetries=1 inside)
+    if (looksCutOff(text, 70)) {
+      const rewritePrompt =
+        basePrompt +
+        `
+
+Your previous answer was cut off or too short.
+Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a period.
+`.trim();
+
+      text = await generateWithRetry(rewritePrompt, { maxTokens: 240, temperature: 0.6, maxRetries: 1 });
+    }
+
+    const out = (text || "").trim();
+    if (!out) throw new Error("Empty model response.");
+    return out;
   } catch (err) {
-    console.error("Gemini Diary Feedback Error:", err);
-    return "Great job recording your thoughts. Keeping track of these moments is key to long-term improvement!";
+    // IMPORTANT: Throw so Diary.tsx can stop spinner in finally (no infinite loading)
+    throw toUserFacingError(err);
   }
 };
 

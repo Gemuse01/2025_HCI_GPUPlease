@@ -96,17 +96,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, closeMobile }) => {
             })}
           </nav>
 
-          {/* Footer / Reset */}
-          <div className="p-4 mx-4 mb-4 bg-gray-50 rounded-2xl border border-gray-100 shrink-0">
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">System</h4>
-            <button
-              onClick={handleReset}
-              className="w-full flex items-center px-3 py-2.5 text-sm font-bold text-red-600 rounded-xl hover:bg-red-100/50 transition-colors group"
-            >
-              <LogOut size={18} className="mr-3 text-red-400 group-hover:text-red-500 transition-colors" />
-              Reset Demo Data
-            </button>
-          </div>
+
         </div>
       </aside>
     </>

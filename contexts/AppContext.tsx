@@ -49,7 +49,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (type === 'BUY') {
         if (isKoreanStock) {
           if (newCashKrw < totalCost) {
-            alert("원화 잔액이 부족합니다.");
+            alert("Insufficient KRW balance.");
             return prev;
           }
           newCashKrw -= totalCost;
