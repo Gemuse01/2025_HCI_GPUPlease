@@ -1,14 +1,13 @@
-// VirtualTrading.tsx
-import React, { useState, useMemo, useEffect } from 'react';
-import { useApp } from '../contexts/AppContext';
+import React, { useState, useMemo, useEffect } from "react";
+import { useApp } from "../contexts/AppContext";
 import {
   MOCK_STOCKS,
   INITIAL_CAPITAL,
   INITIAL_CAPITAL_KRW,
   EMOTION_OPTIONS,
   REASON_OPTIONS,
-} from '../constants';
-import { Stock } from '../types';
+} from "../constants";
+import { Stock } from "../types";
 import {
   TrendingUp,
   PieChart,
@@ -22,15 +21,16 @@ import {
   History,
   Sparkles,
   X,
-} from 'lucide-react';
-import { searchNasdaqStocks, getYFinanceQuotes } from '../services/stockService';
+  Tag,
+} from "lucide-react";
+import { searchNasdaqStocks, getYFinanceQuotes } from "../services/stockService";
 
-const QUOTE_CACHE_KEY = 'finguide_live_quotes_v1';
+const QUOTE_CACHE_KEY = "finguide_live_quotes_v1";
 
 type Tx = {
   id: string;
   date: string;
-  type: 'BUY' | 'SELL';
+  type: "BUY" | "SELL";
   symbol: string;
   quantity: number;
   price: number;
@@ -44,10 +44,17 @@ type DiaryEntryLite = {
   note?: string;
   related_symbol?: string;
   aiFeedback?: string;
+
+  what_if?: string;
+  recheck_pct?: number;
+  trade_type?: "BUY" | "SELL";
+  trade_qty?: number;
+  trade_price?: number;
+  trade_executed_at?: string;
 };
 
 function isKoreanStock(symbol: string) {
-  return symbol.endsWith('.KS') || symbol.endsWith('.KQ');
+  return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
 }
 
 function safeJsonParse<T>(raw: string | null): T | null {
@@ -59,17 +66,68 @@ function safeJsonParse<T>(raw: string | null): T | null {
   }
 }
 
+function toNumberOrUndef(v: string): number | undefined {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return n;
+}
+
+function formatRecheckLabel(recheckPct?: number) {
+  if (typeof recheckPct !== "number" || !Number.isFinite(recheckPct)) return "";
+  const sign = recheckPct > 0 ? "+" : "";
+  return `Recheck at ${sign}${recheckPct}% move`;
+}
+
+/** 작은 Tooltip (hover/focus) */
+const Tooltip: React.FC<{
+  text: string;
+  children: React.ReactNode;
+  side?: "top" | "bottom";
+  /** ✅ form control 감쌀 때만 w-full로 펼치기 */
+  fullWidth?: boolean;
+}> = ({ text, children, side = "top", fullWidth = false }) => {
+  const pos =
+    side === "top"
+      ? "bottom-full mb-2 left-1/2 -translate-x-1/2"
+      : "top-full mt-2 left-1/2 -translate-x-1/2";
+
+  const arrow =
+    side === "top"
+      ? "top-full left-1/2 -translate-x-1/2 border-t-gray-900 border-l-transparent border-r-transparent border-b-transparent"
+      : "bottom-full left-1/2 -translate-x-1/2 border-b-gray-900 border-l-transparent border-r-transparent border-t-transparent";
+
+  // ✅ 핵심: inline-flex는 shrink-to-fit이라 w-full이 먹기 어려움 → form일 때만 block w-full
+  const wrapperClass = fullWidth
+    ? "relative block w-full group outline-none"
+    : "relative inline-flex group outline-none";
+
+  return (
+    <span className={wrapperClass}>
+      {children}
+      <span
+        role="tooltip"
+        className={`pointer-events-none absolute z-50 ${pos} opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150`}
+      >
+        <span className="relative inline-block max-w-[280px] whitespace-nowrap rounded-lg bg-gray-900 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-lg">
+          {text}
+          <span className={`pointer-events-none absolute ${arrow} border-[6px]`} />
+        </span>
+      </span>
+    </span>
+  );
+};
+
 const VirtualTrading: React.FC = () => {
   const app = useApp();
   const { portfolio, transactions, executeTrade, addDiaryEntry } = app as any;
   const diary: DiaryEntryLite[] = ((app as any).diary as DiaryEntryLite[]) || [];
 
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null);
-  const [tradeType, setTradeType] = useState<'BUY' | 'SELL'>('BUY');
+  const [tradeType, setTradeType] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState<number | string>(1);
 
   // --- 검색 & 실시간 시세 상태 ---
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Stock[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -77,14 +135,31 @@ const VirtualTrading: React.FC = () => {
   const [livePrices, setLivePrices] = useState<Record<string, { price: number; change_pct: number }>>({});
   const [stockNames, setStockNames] = useState<Record<string, string>>({});
 
-  // --- Post-trade reflection (Diary.tsx UI 스타일) ---
-  const [lastTrade, setLastTrade] = useState<{ type: 'BUY' | 'SELL'; symbol: string } | null>(null);
+  // --- Post-trade reflection ---
+  const [lastTrade, setLastTrade] = useState<{
+    type: "BUY" | "SELL";
+    symbol: string;
+    quantity: number;
+    price: number;
+    executedAt: string; // ISO
+  } | null>(null);
+
   const [showReflection, setShowReflection] = useState(false);
-  const [reflectionData, setReflectionData] = useState({
-    emotion: 'neutral',
-    reason: 'analysis',
-    note: '',
-    related_symbol: '',
+
+  const [reflectionData, setReflectionData] = useState<{
+    emotion: string;
+    reason: string;
+    note: string;
+    related_symbol: string;
+    what_if: string;
+    recheck_pct: string; // controlled input
+  }>({
+    emotion: "neutral",
+    reason: "analysis",
+    note: "",
+    related_symbol: "",
+    what_if: "",
+    recheck_pct: "",
   });
 
   const visibleStocks: Stock[] = searchQuery.trim() && searchResults.length > 0 ? searchResults : MOCK_STOCKS;
@@ -143,16 +218,14 @@ const VirtualTrading: React.FC = () => {
     try {
       const results = await searchNasdaqStocks(q);
       if (results.length === 0) {
-        setSearchError(
-          '지금은 외부 주가 API 한도/오류로 검색 결과를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.'
-        );
+        setSearchError("지금은 외부 주가 API 한도/오류로 검색 결과를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.");
       } else {
         setSearchResults(results);
         setSearchCache((prev) => ({ ...prev, [q]: results }));
       }
     } catch (err) {
-      console.error('Stock search failed:', err);
-      setSearchError('An error occurred during the search. Please try again later.');
+      console.error("Stock search failed:", err);
+      setSearchError("An error occurred during the search. Please try again later.");
     } finally {
       setIsSearching(false);
     }
@@ -180,13 +253,13 @@ const VirtualTrading: React.FC = () => {
             try {
               localStorage.setItem(QUOTE_CACHE_KEY, JSON.stringify(merged));
             } catch (e) {
-              console.warn('Failed to save quote cache', e);
+              console.warn("Failed to save quote cache", e);
             }
             return merged;
           });
         }
       } catch (err) {
-        console.error('Realtime quote fetch error:', err);
+        console.error("Realtime quote fetch error:", err);
       }
     };
 
@@ -203,7 +276,7 @@ const VirtualTrading: React.FC = () => {
     const live = livePrices[stock.symbol];
     const stockWithLivePrice: Stock = live ? { ...stock, price: live.price, change_pct: live.change_pct } : stock;
     setSelectedStock(stockWithLivePrice);
-    setTradeType('BUY');
+    setTradeType("BUY");
     setQuantity(1);
   };
 
@@ -213,19 +286,24 @@ const VirtualTrading: React.FC = () => {
     if (!selectedStock) return;
     const qty = Number(quantity);
     if (isNaN(qty) || qty <= 0) {
-      alert('Please enter a valid quantity.');
+      alert("Please enter a valid quantity.");
       return;
     }
 
     executeTrade(tradeType, selectedStock.symbol, qty, selectedStock.price);
 
-    const trade = { type: tradeType, symbol: selectedStock.symbol };
-    setLastTrade(trade);
+    const tradeSnapshot = {
+      type: tradeType,
+      symbol: selectedStock.symbol,
+      quantity: qty,
+      price: selectedStock.price,
+      executedAt: new Date().toISOString(),
+    };
+    setLastTrade(tradeSnapshot);
 
-    // ✅ Diary.tsx 모달처럼 ticker 자동 세팅
     setReflectionData((prev) => ({
       ...prev,
-      related_symbol: trade.symbol,
+      related_symbol: tradeSnapshot.symbol,
     }));
 
     setShowReflection(true);
@@ -301,23 +379,42 @@ const VirtualTrading: React.FC = () => {
     fetchStockNames();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    (portfolio?.assets || []).map((a: any) => a.symbol).join(','),
-    (transactions || []).map((t: any) => t.symbol).join(','),
+    (portfolio?.assets || []).map((a: any) => a.symbol).join(","),
+    (transactions || []).map((t: any) => t.symbol).join(","),
   ]);
 
   const closeReflectionModal = () => {
     setShowReflection(false);
-    setReflectionData({ emotion: 'neutral', reason: 'analysis', note: '', related_symbol: '' });
+    setReflectionData({
+      emotion: "neutral",
+      reason: "analysis",
+      note: "",
+      related_symbol: "",
+      what_if: "",
+      recheck_pct: "",
+    });
+    setLastTrade(null);
   };
 
   const handleSaveReflection = () => {
     if (!reflectionData.note.trim()) return;
 
+    const recheckPctNum = toNumberOrUndef(reflectionData.recheck_pct);
+
+    // ✅ NOTE: user note is saved "as-is" (no forced Trade line prepend)
     addDiaryEntry({
       emotion: reflectionData.emotion as any,
       reason: reflectionData.reason as any,
-      note: reflectionData.note,
-      related_symbol: (reflectionData.related_symbol || lastTrade?.symbol || '').toUpperCase() || undefined,
+      note: reflectionData.note.trim(),
+      related_symbol: (reflectionData.related_symbol || lastTrade?.symbol || "").toUpperCase() || undefined,
+
+      what_if: reflectionData.what_if?.trim() || undefined,
+      recheck_pct: recheckPctNum,
+
+      trade_type: lastTrade?.type,
+      trade_qty: lastTrade?.quantity,
+      trade_price: lastTrade?.price,
+      trade_executed_at: lastTrade?.executedAt,
     });
 
     closeReflectionModal();
@@ -341,9 +438,9 @@ const VirtualTrading: React.FC = () => {
 
     if (n === 0) {
       return {
-        mostActiveLine: 'Most active: —',
-        tradeCountLine: 'Trade count: —',
-        diarySignalsLine: 'Diary signals: —',
+        mostActiveLine: "Most active: —",
+        tradeCountLine: "Trade count: —",
+        diarySignalsLine: "Diary signals: —",
       };
     }
 
@@ -353,10 +450,10 @@ const VirtualTrading: React.FC = () => {
     });
 
     const top = [...bySymbol.entries()].sort((a, b) => b[1].trades - a[1].trades)[0];
-    const topSymbol = top?.[0] || '—';
+    const topSymbol = top?.[0] || "—";
     const topTrades = top?.[1]?.trades || 0;
 
-    const buyCount = lastN.filter((t) => t.type === 'BUY').length;
+    const buyCount = lastN.filter((t) => t.type === "BUY").length;
     const sellCount = n - buyCount;
     const avgQty = lastN.reduce((s, t) => s + Math.abs(t.quantity || 0), 0) / n;
 
@@ -380,10 +477,10 @@ const VirtualTrading: React.FC = () => {
       tradeCountLine: `Trade count (last ${n}): BUY ${buyCount} / SELL ${sellCount} · Avg qty ${avgQty.toFixed(1)}.`,
       diarySignalsLine:
         topEmotion || topReason
-          ? `Diary signals: ${topEmotion ? `emotion=${topEmotion}` : ''}${topEmotion && topReason ? ', ' : ''}${
-              topReason ? `driver=${topReason}` : ''
+          ? `Diary signals: ${topEmotion ? `emotion=${topEmotion}` : ""}${topEmotion && topReason ? ", " : ""}${
+              topReason ? `driver=${topReason}` : ""
             }.`
-          : 'Diary signals: —',
+          : "Diary signals: —",
     };
   }, [txSorted, diary]);
 
@@ -446,15 +543,15 @@ const VirtualTrading: React.FC = () => {
             </div>
             <div
               className={`flex items-center gap-1 text-xs sm:text-sm font-extrabold ${
-                nasdaqPL >= 0 ? 'text-green-600' : 'text-red-600'
+                nasdaqPL >= 0 ? "text-green-600" : "text-red-600"
               }`}
             >
               <span className="truncate min-w-0">
-                {nasdaqPL >= 0 ? '+' : ''}${nasdaqPL.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {nasdaqPL >= 0 ? "+" : ""}${nasdaqPL.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </span>
               <span
                 className={`text-[10px] sm:text-xs font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                  nasdaqPL >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  nasdaqPL >= 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
                 }`}
               >
                 {nasdaqPLPercent.toFixed(2)}%
@@ -469,15 +566,15 @@ const VirtualTrading: React.FC = () => {
             </div>
             <div
               className={`flex items-center gap-1 text-xs sm:text-sm font-extrabold ${
-                koreanPL >= 0 ? 'text-green-600' : 'text-red-600'
+                koreanPL >= 0 ? "text-green-600" : "text-red-600"
               }`}
             >
               <span className="truncate min-w-0">
-                {koreanPL >= 0 ? '+' : ''}₩{koreanPL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {koreanPL >= 0 ? "+" : ""}₩{koreanPL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </span>
               <span
                 className={`text-[10px] sm:text-xs font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                  koreanPL >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                  koreanPL >= 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
                 }`}
               >
                 {koreanPLPercent.toFixed(2)}%
@@ -509,13 +606,13 @@ const VirtualTrading: React.FC = () => {
               disabled={isSearching}
               className="px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-bold hover:bg-primary-700 transition-colors disabled:opacity-50"
             >
-              {isSearching ? 'Searching...' : 'Search'}
+              {isSearching ? "Searching..." : "Search"}
             </button>
             {searchQuery.trim() && (
               <button
                 type="button"
                 onClick={() => {
-                  setSearchQuery('');
+                  setSearchQuery("");
                   setSearchResults([]);
                 }}
                 className="px-3 py-2 rounded-xl bg-gray-100 text-gray-700 text-xs font-bold hover:bg-gray-200 transition-colors"
@@ -554,8 +651,8 @@ const VirtualTrading: React.FC = () => {
                   <div
                     className={`flex items-center text-sm font-bold ${
                       changePct >= 0
-                        ? 'text-green-600 bg-green-50 px-2 py-1 rounded-md'
-                        : 'text-red-600 bg-red-50 px-2 py-1 rounded-md'
+                        ? "text-green-600 bg-green-50 px-2 py-1 rounded-md"
+                        : "text-red-600 bg-red-50 px-2 py-1 rounded-md"
                     }`}
                   >
                     {changePct >= 0 ? (
@@ -563,7 +660,7 @@ const VirtualTrading: React.FC = () => {
                     ) : (
                       <ArrowDownRight size={16} className="mr-1" />
                     )}
-                    {changePct > 0 ? '+' : ''}
+                    {changePct > 0 ? "+" : ""}
                     {changePct.toFixed(2)}%
                   </div>
                 </div>
@@ -601,10 +698,10 @@ const VirtualTrading: React.FC = () => {
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-xl font-extrabold text-gray-900">
-                {tradeType === 'BUY' ? 'Buy' : 'Sell'} {selectedStock.symbol}
+                {tradeType === "BUY" ? "Buy" : "Sell"} {selectedStock.symbol}
               </h2>
               <p className="text-sm text-gray-500">
-                Current Price {formatPrice(selectedStock.price, selectedStock.symbol)} · Quantity Held{' '}
+                Current Price {formatPrice(selectedStock.price, selectedStock.symbol)} · Quantity Held{" "}
                 {getOwnedQuantity(selectedStock.symbol)}
               </p>
             </div>
@@ -612,18 +709,18 @@ const VirtualTrading: React.FC = () => {
             <div className="flex p-1 bg-gray-100 rounded-xl">
               <button
                 className={`flex-1 px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-                  tradeType === 'BUY' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  tradeType === "BUY" ? "bg-white text-primary-700 shadow-sm" : "text-gray-500 hover:text-gray-700"
                 }`}
-                onClick={() => setTradeType('BUY')}
+                onClick={() => setTradeType("BUY")}
                 type="button"
               >
                 BUY
               </button>
               <button
                 className={`flex-1 px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-                  tradeType === 'SELL' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  tradeType === "SELL" ? "bg-white text-primary-700 shadow-sm" : "text-gray-500 hover:text-gray-700"
                 }`}
-                onClick={() => setTradeType('SELL')}
+                onClick={() => setTradeType("SELL")}
                 type="button"
               >
                 SELL
@@ -633,7 +730,7 @@ const VirtualTrading: React.FC = () => {
 
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-2">
-              Quantity {tradeType === 'SELL' && `(최대: ${getOwnedQuantity(selectedStock.symbol)})`}
+              Quantity {tradeType === "SELL" && `(최대: ${getOwnedQuantity(selectedStock.symbol)})`}
             </label>
             <input
               type="number"
@@ -651,7 +748,7 @@ const VirtualTrading: React.FC = () => {
             </span>
           </div>
 
-          {tradeType === 'BUY' &&
+          {tradeType === "BUY" &&
             (() => {
               const totalCost = Number(quantity) * selectedStock.price;
               const insufficient = isKoreanStock(selectedStock.symbol)
@@ -661,12 +758,12 @@ const VirtualTrading: React.FC = () => {
               return insufficient ? (
                 <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
                   <AlertCircle size={18} />
-                  {isKoreanStock(selectedStock.symbol) ? 'Insufficient KRW balance.' : 'Insufficient cash balance.'}
+                  {isKoreanStock(selectedStock.symbol) ? "Insufficient KRW balance." : "Insufficient cash balance."}
                 </div>
               ) : null;
             })()}
 
-          {tradeType === 'SELL' && Number(quantity) > getOwnedQuantity(selectedStock.symbol) && (
+          {tradeType === "SELL" && Number(quantity) > getOwnedQuantity(selectedStock.symbol) && (
             <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
               <AlertCircle size={18} />
               You can’t sell more than you hold.
@@ -680,7 +777,7 @@ const VirtualTrading: React.FC = () => {
                 const qty = Number(quantity);
                 if (qty <= 0) return true;
 
-                if (tradeType === 'BUY') {
+                if (tradeType === "BUY") {
                   const totalCost = qty * selectedStock.price;
                   return isKoreanStock(selectedStock.symbol)
                     ? totalCost > (portfolio?.cash_krw || 0)
@@ -690,9 +787,9 @@ const VirtualTrading: React.FC = () => {
                 return qty > getOwnedQuantity(selectedStock.symbol);
               })()}
               className={`flex-1 py-3 rounded-xl font-extrabold text-white text-lg transition-all ${
-                tradeType === 'BUY'
-                  ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-300'
-                  : 'bg-red-600 hover:bg-red-700 disabled:bg-red-300'
+                tradeType === "BUY"
+                  ? "bg-green-600 hover:bg-green-700 disabled:bg-green-300"
+                  : "bg-red-600 hover:bg-red-700 disabled:bg-red-300"
               }`}
               type="button"
             >
@@ -710,7 +807,7 @@ const VirtualTrading: React.FC = () => {
         </div>
       )}
 
-      {/* ✅ Coach Snapshot: 룰 기반 요약만 */}
+      {/* ✅ Coach Snapshot */}
       <div className="bg-primary-50 border border-primary-100 rounded-2xl p-4">
         <div className="flex items-start gap-3">
           <div className="p-2 bg-white rounded-full border border-primary-100 shrink-0">
@@ -728,7 +825,6 @@ const VirtualTrading: React.FC = () => {
           </div>
         </div>
       </div>
-
 
       {/* 보유 종목 / 거래 내역 섹션 */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
@@ -808,16 +904,16 @@ const VirtualTrading: React.FC = () => {
                       return (
                         <tr key={tx.id}>
                           <td className="py-2 px-2 text-xs text-gray-500">
-                            {new Date(tx.date).toLocaleString('en-US', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short',
-                              timeZone: 'Asia/Seoul',
+                            {new Date(tx.date).toLocaleString("en-US", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                              timeZone: "Asia/Seoul",
                             })}
                           </td>
                           <td className="py-2 px-2">
                             <span
                               className={`px-2 py-0.5 text-xs font-bold rounded-md uppercase ${
-                                tx.type === 'BUY' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
+                                tx.type === "BUY" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"
                               }`}
                             >
                               {tx.type}
@@ -838,14 +934,15 @@ const VirtualTrading: React.FC = () => {
         </div>
       </div>
 
-      {/* Post-Trade Reflection Modal (Diary.tsx UI 버전) */}
+      {/* Post-Trade Reflection Modal */}
       {showReflection && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-end sm:items-center justify-center min-h-full p-4 text-center sm:p-0">
-            {/* Backdrop */}
-            <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity" onClick={closeReflectionModal} />
+            <div
+              className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity"
+              onClick={closeReflectionModal}
+            />
 
-            {/* Modal */}
             <div className="relative bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:max-w-lg w-full animate-in fade-in zoom-in-95 duration-200">
               <div className="bg-white px-6 py-6">
                 <div className="flex justify-between items-center mb-6">
@@ -859,24 +956,80 @@ const VirtualTrading: React.FC = () => {
                   </button>
                 </div>
 
+                {/* ✅ Trade snapshot as tags + tooltips */}
+                {lastTrade && (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    <Tooltip text="These are recorded at the exact moment you executed the trade.">
+                      <span
+                        tabIndex={0}
+                        className="px-2.5 py-1 bg-indigo-50 text-indigo-800 rounded-lg text-xs font-extrabold border border-indigo-100"
+                      >
+                        Trade Snapshot
+                      </span>
+                    </Tooltip>
+
+                    <Tooltip text="Trade direction">
+                      <span
+                        tabIndex={0}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-extrabold border ${
+                          lastTrade.type === "BUY"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                            : "bg-rose-50 text-rose-700 border-rose-100"
+                        }`}
+                      >
+                        {lastTrade.type}
+                      </span>
+                    </Tooltip>
+
+                    <Tooltip text="Ticker you traded">
+                      <span
+                        tabIndex={0}
+                        className="px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold border border-blue-100 flex items-center gap-1.5"
+                      >
+                        <Tag size={14} />
+                        {lastTrade.symbol}
+                      </span>
+                    </Tooltip>
+
+                    <Tooltip text="Executed price">
+                      <span
+                        tabIndex={0}
+                        className="px-2.5 py-1 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200"
+                      >
+                        Entry {formatPrice(lastTrade.price, lastTrade.symbol)}
+                      </span>
+                    </Tooltip>
+
+                    <Tooltip text="Executed quantity">
+                      <span
+                        tabIndex={0}
+                        className="px-2.5 py-1 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200"
+                      >
+                        Qty {lastTrade.quantity}
+                      </span>
+                    </Tooltip>
+                  </div>
+                )}
+
                 <div className="space-y-5">
                   {/* Emotion pills */}
                   <div>
                     <label className="block text-sm font-bold text-gray-900 mb-2">How are you feeling?</label>
                     <div className="flex flex-wrap gap-2">
                       {(EMOTION_OPTIONS as any[]).map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() => setReflectionData((prev) => ({ ...prev, emotion: opt.value }))}
-                          className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
-                            reflectionData.emotion === opt.value
-                              ? `${opt.color} ring-2 ring-offset-1 ring-primary-300 border-transparent`
-                              : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                          }`}
-                          type="button"
-                        >
-                          {opt.label}
-                        </button>
+                        <Tooltip key={opt.value} text="How is your feeling?">
+                          <button
+                            onClick={() => setReflectionData((prev) => ({ ...prev, emotion: opt.value }))}
+                            className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+                              reflectionData.emotion === opt.value
+                                ? `${opt.color} ring-2 ring-offset-1 ring-primary-300 border-transparent`
+                                : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                            }`}
+                            type="button"
+                          >
+                            {opt.label}
+                          </button>
+                        </Tooltip>
                       ))}
                     </div>
                   </div>
@@ -885,41 +1038,82 @@ const VirtualTrading: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-bold text-gray-900 mb-2">Primary Driver</label>
-                      <select
-                        value={reflectionData.reason}
-                        onChange={(e) => setReflectionData((prev) => ({ ...prev, reason: e.target.value }))}
-                        className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 font-medium"
-                      >
-                        {(REASON_OPTIONS as any[]).map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                      <Tooltip fullWidth text="What mainly drove your decision?">
+                        <select
+                          value={reflectionData.reason}
+                          onChange={(e) => setReflectionData((prev) => ({ ...prev, reason: e.target.value }))}
+                          className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 font-medium"
+                        >
+                          {(REASON_OPTIONS as any[]).map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Tooltip>
                     </div>
 
                     <div>
                       <label className="block text-sm font-bold text-gray-900 mb-2">Ticker</label>
-                      <input
-                        type="text"
-                        value={(reflectionData.related_symbol || lastTrade?.symbol || '').toUpperCase()}
-                        onChange={(e) => setReflectionData((prev) => ({ ...prev, related_symbol: e.target.value }))}
-                        className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 font-bold uppercase placeholder:text-gray-400 placeholder:normal-case placeholder:font-normal"
-                        placeholder="e.g. AAPL"
-                      />
+                      <Tooltip fullWidth text="The ticker you are trading">
+                        <input
+                          type="text"
+                          value={(reflectionData.related_symbol || lastTrade?.symbol || "").toUpperCase()}
+                          onChange={(e) => setReflectionData((prev) => ({ ...prev, related_symbol: e.target.value }))}
+                          className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 font-bold uppercase placeholder:text-gray-400 placeholder:normal-case placeholder:font-normal"
+                          placeholder="e.g. AAPL"
+                        />
+                      </Tooltip>
                     </div>
+                  </div>
+
+                  {/* WHAT IF */}
+                  <div>
+                    <label className="block text-sm font-bold text-gray-900 mb-2">WHAT IF (one failure scenario)</label>
+                    <Tooltip fullWidth text="Write one reason your thesis could be wrong.">
+                      <textarea
+                        rows={3}
+                        value={reflectionData.what_if}
+                        onChange={(e) => setReflectionData((prev) => ({ ...prev, what_if: e.target.value }))}
+                        placeholder="Example: If earnings disappoint or macro conditions shift, my thesis could be wrong."
+                        className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 placeholder-gray-400"
+                      />
+                    </Tooltip>
+                    <p className="mt-1 text-xs text-gray-500">One sentence is enough.</p>
+                  </div>
+
+                  {/* PLAN */}
+                  <div>
+                    <label className="block text-sm font-bold text-gray-900 mb-2">PLAN (recheck trigger %)</label>
+                    <div className="flex items-center gap-3">
+                      <Tooltip fullWidth text="Mark 'Recheck Now' if the move reaches threshold">
+                        <input
+                          type="number"
+                          value={reflectionData.recheck_pct}
+                          onChange={(e) => setReflectionData((prev) => ({ ...prev, recheck_pct: e.target.value }))}
+                          placeholder="-7"
+                          className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 font-semibold"
+                        />
+                      </Tooltip>
+                      <span className="text-sm font-semibold text-gray-600 whitespace-nowrap">%</span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Example: <span className="font-semibold">-7</span> → {formatRecheckLabel(-7)}
+                    </p>
                   </div>
 
                   {/* Note */}
                   <div>
                     <label className="block text-sm font-bold text-gray-900 mb-2">Your Thoughts</label>
-                    <textarea
-                      rows={4}
-                      value={reflectionData.note}
-                      onChange={(e) => setReflectionData((prev) => ({ ...prev, note: e.target.value }))}
-                      placeholder="What's on your mind? Why did you make this decision? What did you learn?"
-                      className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 placeholder-gray-400"
-                    />
+                    <Tooltip fullWidth text="This text is shown inside the entry when you open it from Diary.">
+                      <textarea
+                        rows={4}
+                        value={reflectionData.note}
+                        onChange={(e) => setReflectionData((prev) => ({ ...prev, note: e.target.value }))}
+                        placeholder="What's on your mind? Why did you make this decision? What did you learn?"
+                        className="block w-full border-gray-300 rounded-xl py-3 px-4 focus:ring-primary-500 focus:border-primary-500 bg-gray-50 text-gray-900 placeholder-gray-400"
+                      />
+                    </Tooltip>
                   </div>
 
                   {/* Save */}

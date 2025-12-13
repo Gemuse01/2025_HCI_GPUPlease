@@ -43,4 +43,6 @@ ENV/
 *.egg-info/
 dist/
 build/
+.finAI-2/
+
 
