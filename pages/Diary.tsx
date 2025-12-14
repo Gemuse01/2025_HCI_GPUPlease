@@ -20,6 +20,11 @@ import {
   AlertTriangle,
   Target,
   Percent,
+  FileText,
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
 } from "lucide-react";
 
 const QUOTE_CACHE_KEY = "finguide_live_quotes_v1";
@@ -55,7 +60,7 @@ function getEmotionLabel(val: string) {
   return EMOTION_OPTIONS.find((o: any) => o.value === val)?.label || val;
 }
 function getReasonLabel(val: string) {
-  return EMOTION_OPTIONS.find((o: any) => o.value === val)?.label || val;
+  return REASON_OPTIONS.find((o: any) => o.value === val)?.label || val;
 }
 function getEmotionColor(val: string) {
   return EMOTION_OPTIONS.find((o: any) => o.value === val)?.color || "bg-gray-100 text-gray-800";
@@ -143,7 +148,6 @@ function kstDateKey(input: Date | string | number): string {
 function kstMonthKey(input: Date | string | number): string {
   return kstDateKey(input).slice(0, 7); // YYYY-MM
 }
-
 function weekdayShortKST(input: Date | string | number): string {
   const d = typeof input === "string" || typeof input === "number" ? new Date(input) : input;
   return new Intl.DateTimeFormat("en-US", { timeZone: TIMEZONE, weekday: "short" }).format(d);
@@ -152,7 +156,6 @@ function weekdayNumFromShort(short: string): number {
   const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return map[short] ?? 0;
 }
-
 function dateFromKstKey(key: string): Date {
   return new Date(`${key}T00:00:00+09:00`);
 }
@@ -160,6 +163,12 @@ function addDaysToKstKey(key: string, deltaDays: number): string {
   const base = dateFromKstKey(key).getTime();
   const next = new Date(base + deltaDays * 24 * 60 * 60 * 1000);
   return kstDateKey(next);
+}
+function getWeekStartKeyFromDate(dateLike: Date | string | number): string {
+  const wd = weekdayNumFromShort(weekdayShortKST(dateLike));
+  const offsetToMon = (wd + 6) % 7;
+  const todayKey = kstDateKey(dateLike);
+  return addDaysToKstKey(todayKey, -offsetToMon);
 }
 
 function isRecheckNow(movePct?: number, recheckPct?: number) {
@@ -182,8 +191,33 @@ function makeTradeKeyKSTDay(params: { date: string | number | Date; type?: strin
   return `${day}|${type}|${symbol}|${qtyKey}|${priceKey}`;
 }
 
+/* -----------------------------
+ * Weekly report helpers
+ * ----------------------------- */
+function stripCodeFences(text: string): string {
+  const t = String(text || "").trim();
+  if (!t) return "";
+  // ```json ... ``` or ``` ... ```
+  if (t.startsWith("```")) {
+    const withoutFirst = t.replace(/^```[a-zA-Z0-9]*\s*/m, "");
+    const withoutLast = withoutFirst.replace(/```$/m, "");
+    return withoutLast.trim();
+  }
+  return t;
+}
+
+// 런타임에서 geminiService.ts에 generateWeeklyReport가 생기면 자동으로 사용.
+// (지금 Diary.tsx만 먼저 바꾸는 단계에서도 빌드 깨지지 않도록 동적 import)
+async function tryGenerateWeeklyReport(payload: any): Promise<any> {
+  const mod: any = await import("../services/geminiService");
+  if (typeof mod?.generateWeeklyReport === "function") {
+    return await mod.generateWeeklyReport(payload);
+  }
+  throw new Error("Weekly report generator is not implemented yet. (Add generateWeeklyReport in geminiService.ts)");
+}
+
 const Diary: React.FC = () => {
-  const { diary, transactions } = useApp() as any;
+  const { user, diary, transactions } = useApp() as any;
 
   // -----------------------------
   // Quotes (current price on cards)
@@ -303,7 +337,7 @@ const Diary: React.FC = () => {
   }
 
   // -----------------------------
-  // ✅ Weekly goal (kept)
+  // ✅ Weekly goal (global, "this week")
   // -----------------------------
   const todayKey = useMemo(() => kstDateKey(Date.now()), []);
   const dayCountMap = useMemo(() => {
@@ -316,9 +350,7 @@ const Diary: React.FC = () => {
   }, [diary]);
 
   const weeklyProgress = useMemo(() => {
-    const weekday = weekdayNumFromShort(weekdayShortKST(Date.now()));
-    const offsetToMon = (weekday + 6) % 7;
-    const weekStartKey = addDaysToKstKey(todayKey, -offsetToMon);
+    const weekStartKey = getWeekStartKeyFromDate(Date.now());
     const weekEndKeyExclusive = addDaysToKstKey(weekStartKey, 7);
 
     let count = 0;
@@ -327,12 +359,11 @@ const Diary: React.FC = () => {
     }
 
     const pct = Math.max(0, Math.min(100, Math.round((count / WEEKLY_GOAL) * 100)));
-
-    return { weekStartKey, count, pct };
-  }, [dayCountMap, todayKey]);
+    return { weekStartKey, weekEndKeyExclusive, count, pct };
+  }, [dayCountMap]);
 
   // -----------------------------
-  // ✅ Trade → Diary coverage (%)
+  // ✅ Trade → Diary coverage (all time)
   // -----------------------------
   const tradeDiaryCoverage = useMemo(() => {
     const txs = Array.isArray(transactions) ? transactions : [];
@@ -405,7 +436,7 @@ const Diary: React.FC = () => {
   }, [transactions, diary]);
 
   // -----------------------------
-  // ✅ Stats reward: emotion/driver win-rate + avg move%
+  // ✅ Stats reward: emotion/driver win-rate + avg move% (all time)
   // -----------------------------
   type GroupStat = { key: string; label: string; n: number; win: number; avgMove: number };
 
@@ -478,6 +509,204 @@ const Diary: React.FC = () => {
     };
   }, [diary, livePrices]);
 
+  /* =========================================================
+   * ✅ Weekly Report (Button + Modal + Week-filter Aggregation)
+   * ========================================================= */
+  const [reportOpen, setReportOpen] = useState(false);
+
+  // “리포트 기준 주” (기본: 이번 주 월요일)
+  const [reportWeekStartKey, setReportWeekStartKey] = useState<string>(() => getWeekStartKeyFromDate(Date.now()));
+
+  // AI 결과 상태
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string>("");
+  const [reportOutput, setReportOutput] = useState<string>("");
+
+  const reportWeekEndExclusive = useMemo(() => addDaysToKstKey(reportWeekStartKey, 7), [reportWeekStartKey]);
+  const reportWeekRangeLabel = useMemo(() => {
+    const endInclusive = addDaysToKstKey(reportWeekStartKey, 6);
+    return `${reportWeekStartKey} ~ ${endInclusive}`;
+  }, [reportWeekStartKey]);
+
+  // 이번 주(선택 주)의 일기/거래 필터링
+  const weekDiaryEntries = useMemo(() => {
+    return (diary ?? []).filter((d: any) => {
+      const k = kstDateKey(d.date);
+      return k >= reportWeekStartKey && k < reportWeekEndExclusive;
+    });
+  }, [diary, reportWeekStartKey, reportWeekEndExclusive]);
+
+  const weekTransactions = useMemo(() => {
+    return (transactions ?? []).filter((t: any) => {
+      const k = kstDateKey(t.date);
+      return k >= reportWeekStartKey && k < reportWeekEndExclusive;
+    });
+  }, [transactions, reportWeekStartKey, reportWeekEndExclusive]);
+
+  // 선택 주 Weekly Goal
+  const weekGoal = useMemo(() => {
+    const count = weekDiaryEntries.length;
+    const pct = Math.max(0, Math.min(100, Math.round((count / WEEKLY_GOAL) * 100)));
+    return { count, pct };
+  }, [weekDiaryEntries]);
+
+  // 선택 주 Coverage (주간)
+  const weekCoverage = useMemo(() => {
+    const txKeys: string[] = (weekTransactions ?? [])
+      .map((t: any) =>
+        makeTradeKeyKSTDay({
+          date: t.date,
+          type: t.type,
+          symbol: t.symbol,
+          quantity: t.quantity,
+          price: t.price,
+        })
+      )
+      .filter((k) => k.split("|").every((p) => p !== ""));
+
+    const diaryKeys = new Set(
+      (weekDiaryEntries ?? [])
+        .map((d: any) =>
+          makeTradeKeyKSTDay({
+            date: d.date,
+            type: d.trade_type,
+            symbol: d.related_symbol,
+            quantity: d.trade_qty,
+            price: d.trade_price,
+          })
+        )
+        .filter((k) => k.split("|").every((p) => p !== ""))
+    );
+
+    let covered = 0;
+    for (const k of txKeys) if (diaryKeys.has(k)) covered += 1;
+
+    const total = txKeys.length;
+    const pct = total ? Math.round((covered / total) * 100) : 0;
+
+    return { covered, total, pct };
+  }, [weekTransactions, weekDiaryEntries]);
+
+  // 선택 주 Your Patterns(주간)
+  const weekPatterns = useMemo(() => {
+    type Stat = { n: number; win: number; sumMove: number };
+    const byEmotion = new Map<string, Stat>();
+    const byDriver = new Map<string, Stat>();
+
+    const entries = (weekDiaryEntries ?? []).filter((e: any) => e?.trade_price && e?.related_symbol);
+
+    for (const entry of entries) {
+      const symbol = String(entry.related_symbol || "").toUpperCase();
+      const current = symbol ? getCurrentPrice(symbol, entry?.trade_price) : undefined;
+
+      const move = computeMovePct(current, entry?.trade_price);
+      const eff = effectiveMovePct(entry, move);
+      if (typeof eff !== "number" || !Number.isFinite(eff)) continue;
+
+      const emo = String(entry.emotion || "unknown");
+      const drv = String(entry.reason || "unknown");
+      const win = eff > 0 ? 1 : 0;
+
+      const a = byEmotion.get(emo) ?? { n: 0, win: 0, sumMove: 0 };
+      a.n += 1;
+      a.win += win;
+      a.sumMove += eff;
+      byEmotion.set(emo, a);
+
+      const b = byDriver.get(drv) ?? { n: 0, win: 0, sumMove: 0 };
+      b.n += 1;
+      b.win += win;
+      b.sumMove += eff;
+      byDriver.set(drv, b);
+    }
+
+    const toList = (m: Map<string, Stat>, kind: "emotion" | "driver") => {
+      const out: Array<{ key: string; label: string; n: number; winRate: number; avgMove: number }> = [];
+      for (const [k, v] of m.entries()) {
+        const label = kind === "emotion" ? getEmotionLabel(k) : getReasonLabel(k);
+        out.push({
+          key: k,
+          label,
+          n: v.n,
+          winRate: v.n ? v.win / v.n : 0,
+          avgMove: v.n ? v.sumMove / v.n : 0,
+        });
+      }
+      return out.sort((x, y) => y.n - x.n);
+    };
+
+    const emotion = toList(byEmotion, "emotion");
+    const driver = toList(byDriver, "driver");
+    const sampleN = emotion.reduce((acc, x) => acc + x.n, 0);
+
+    return { emotion, driver, sampleN };
+  }, [weekDiaryEntries, livePrices]);
+
+  const openReport = () => {
+    setReportWeekStartKey(getWeekStartKeyFromDate(Date.now()));
+    setReportOutput("");
+    setReportError("");
+    setReportOpen(true);
+  };
+
+  const closeReport = () => {
+    setReportOpen(false);
+    setReportLoading(false);
+    setReportError("");
+  };
+
+  const goPrevWeek = () => setReportWeekStartKey((prev) => addDaysToKstKey(prev, -7));
+  const goNextWeek = () => setReportWeekStartKey((prev) => addDaysToKstKey(prev, +7));
+
+  const generateWeeklyReport = async () => {
+    setReportError("");
+    setReportOutput("");
+    setReportLoading(true);
+
+    try {
+      // LLM에 넘길 “주간 컨텍스트” (너무 길지 않게)
+      const compactEntries = (weekDiaryEntries ?? [])
+        .slice()
+        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        .map((d: any) => ({
+          date: d.date,
+          emotion: d.emotion,
+          reason: d.reason,
+          related_symbol: d.related_symbol,
+          trade_type: d.trade_type,
+          trade_qty: d.trade_qty,
+          trade_price: d.trade_price,
+          recheck_pct: d.recheck_pct,
+          what_if: d.what_if,
+          note: String(d.note || "").slice(0, 600),
+        }));
+
+      const payload = {
+        weekRange: reportWeekRangeLabel,
+        metrics: {
+          diaryCoverage: weekCoverage, // {covered,total,pct}
+          weeklyGoal: { goal: WEEKLY_GOAL, ...weekGoal }, // {goal,count,pct}
+          patterns: {
+            sampleN: weekPatterns.sampleN,
+            topEmotion: weekPatterns.emotion.slice(0, 5),
+            topDriver: weekPatterns.driver.slice(0, 5),
+          },
+        },
+        entries: compactEntries,
+        persona: user?.persona,
+      };
+
+      const raw = await tryGenerateWeeklyReport(payload);
+      const text = stripCodeFences(typeof raw === "string" ? raw : JSON.stringify(raw, null, 2));
+
+      setReportOutput(text);
+    } catch (err: any) {
+      setReportError(String(err?.message || err));
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   // -----------------------------
   // UI
   // -----------------------------
@@ -492,6 +721,18 @@ const Diary: React.FC = () => {
           </h1>
           <p className="text-gray-600">Entries are created after trades (Virtual Trading Floor). Click a card to review details.</p>
         </div>
+
+        {/* ✅ Weekly Report button */}
+        <Tooltip text="Generate a weekly report (metrics + AI coach summary)">
+          <button
+            type="button"
+            onClick={openReport}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm font-extrabold text-gray-800 hover:bg-gray-50"
+          >
+            <FileText size={16} />
+            Weekly Report
+          </button>
+        </Tooltip>
       </div>
 
       {/* ✅ 1행: Diary Coverage (L) + Weekly Goal (R) */}
@@ -585,13 +826,9 @@ const Diary: React.FC = () => {
 
       {/* ✅ Your patterns */}
       <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-extrabold text-gray-900">Your patterns</div>
-            <div className="text-xs font-semibold text-gray-500">
-              Win rate & Avg Move% (current price 기준) · sample {performanceStats.sampleN}
-            </div>
-          </div>
+        <div>
+          <div className="text-sm font-extrabold text-gray-900">Your patterns</div>
+          <div className="text-xs font-semibold text-gray-500">Win rate & Avg Move% (current price 기준)</div>
         </div>
 
         {performanceStats.sampleN === 0 ? (
@@ -870,7 +1107,7 @@ const Diary: React.FC = () => {
         )}
       </div>
 
-      {/* View entry modal (AI 버튼 없음 유지) */}
+      {/* View entry modal */}
       {viewingEntry && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-end sm:items-center justify-center min-h-full p-4 text-center sm:p-0">
@@ -1042,6 +1279,210 @@ const Diary: React.FC = () => {
                   >
                     Close
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ Weekly Report Modal */}
+      {reportOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-end sm:items-center justify-center min-h-full p-4 text-center sm:p-0">
+            <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity" onClick={closeReport} />
+
+            <div className="relative bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:max-w-3xl w-full animate-in fade-in zoom-in-95 duration-200">
+              <div className="bg-white px-6 py-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+                  <div>
+                    <div className="text-xs font-semibold text-gray-500">Weekly Report</div>
+                    <div className="text-xl font-extrabold text-gray-900">{reportWeekRangeLabel}</div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Tooltip text="Previous week">
+                      <button
+                        type="button"
+                        onClick={goPrevWeek}
+                        className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50"
+                      >
+                        <ChevronLeft size={18} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip text="Next week">
+                      <button
+                        type="button"
+                        onClick={goNextWeek}
+                        className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50"
+                      >
+                        <ChevronRight size={18} />
+                      </button>
+                    </Tooltip>
+
+                    <button
+                      onClick={closeReport}
+                      className="text-gray-400 hover:text-gray-600 p-1 bg-gray-50 rounded-full ml-2"
+                      type="button"
+                    >
+                      <X size={22} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Left: metrics */}
+                  <div className="space-y-4">
+                    {/* Coverage */}
+                    <div className="border border-gray-200 rounded-2xl p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-extrabold text-gray-700">Diary Coverage (this week)</div>
+                          <div className="text-[11px] font-semibold text-gray-500">trades that have a diary entry</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-3xl font-extrabold text-gray-900">{weekCoverage.pct}%</div>
+                          <div className="text-[11px] font-semibold text-gray-500">
+                            {weekCoverage.covered}/{weekCoverage.total}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 w-full h-2.5 rounded-full bg-white border border-gray-200 overflow-hidden">
+                        <div className="h-full bg-emerald-500" style={{ width: `${weekCoverage.pct}%` }} />
+                      </div>
+
+                      <div className="mt-2 text-[11px] font-semibold text-gray-500">
+                        * 매칭 기준: (KST 날짜 + BUY/SELL + ticker + qty + price)
+                      </div>
+                    </div>
+
+                    {/* Weekly goal */}
+                    <div className="border border-gray-200 rounded-2xl p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-extrabold text-gray-700">Weekly Goal (this week)</div>
+                          <div className="text-[11px] font-semibold text-gray-500">entries written this week</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-3xl font-extrabold text-gray-900">
+                            {weekGoal.count}/{WEEKLY_GOAL}
+                          </div>
+                          <div className="text-[11px] font-semibold text-gray-500">{weekGoal.pct}%</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 w-full h-2.5 rounded-full bg-white border border-gray-200 overflow-hidden">
+                        <div className="h-full bg-primary-500" style={{ width: `${weekGoal.pct}%` }} />
+                      </div>
+                    </div>
+
+                    {/* Week patterns */}
+                    <div className="border border-gray-200 rounded-2xl p-4">
+                      <div className="text-xs font-extrabold text-gray-700">Your Patterns (this week)</div>
+                      <div className="text-[11px] font-semibold text-gray-500">Win rate & Avg Move% (current price)</div>
+
+                      {weekPatterns.sampleN === 0 ? (
+                        <div className="mt-3 text-sm text-gray-500">이번 주엔 패턴을 만들 샘플이 부족해요.</div>
+                      ) : (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <div className="text-[11px] font-extrabold text-gray-700 mb-1">Top emotions</div>
+                            <div className="space-y-1">
+                              {weekPatterns.emotion.slice(0, 3).map((s) => (
+                                <div key={s.key} className="flex items-center justify-between">
+                                  <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
+                                  <div className="text-right">
+                                    <div className="text-sm font-extrabold text-gray-900">{Math.round(s.winRate * 100)}%</div>
+                                    <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                                      Avg {s.avgMove >= 0 ? "+" : ""}
+                                      {s.avgMove.toFixed(2)}%
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="text-[11px] font-extrabold text-gray-700 mb-1">Top drivers</div>
+                            <div className="space-y-1">
+                              {weekPatterns.driver.slice(0, 3).map((s) => (
+                                <div key={s.key} className="flex items-center justify-between">
+                                  <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
+                                  <div className="text-right">
+                                    <div className="text-sm font-extrabold text-gray-900">{Math.round(s.winRate * 100)}%</div>
+                                    <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                                      Avg {s.avgMove >= 0 ? "+" : ""}
+                                      {s.avgMove.toFixed(2)}%
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="text-[11px] font-semibold text-gray-500">sample {weekPatterns.sampleN}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right: AI coach summary */}
+                  <div className="border border-gray-200 rounded-2xl p-4 flex flex-col">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-extrabold text-gray-700">AI Coach Summary</div>
+                        <div className="text-[11px] font-semibold text-gray-500">
+                          This uses all entries in the selected week (emotion~what_if~note).
+                        </div>
+                      </div>
+
+                      <Tooltip text="Generate weekly report summary (LLM)">
+                        <button
+                          type="button"
+                          onClick={generateWeeklyReport}
+                          disabled={reportLoading || weekDiaryEntries.length === 0}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-primary-200 bg-primary-50 text-xs font-extrabold text-primary-700 hover:bg-primary-100 hover:border-primary-300 disabled:opacity-50 disabled:hover:bg-primary-50"
+                        >
+                          {reportLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                          Generate
+                        </button>
+                      </Tooltip>
+                    </div>
+
+                    <div className="mt-4 flex-1 min-h-[220px]">
+                      {weekDiaryEntries.length === 0 ? (
+                        <div className="text-sm text-gray-500">선택한 주에 작성된 일기가 없어요.</div>
+                      ) : reportError ? (
+                        <div className="text-sm font-semibold text-red-600 whitespace-pre-wrap break-words">{reportError}</div>
+                      ) : reportOutput ? (
+                        <pre className="text-xs font-semibold text-gray-800 whitespace-pre-wrap break-words bg-gray-50 border border-gray-200 rounded-xl p-3 overflow-auto max-h-[420px]">
+                          {reportOutput}
+                        </pre>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          오른쪽 상단 <span className="font-bold">Generate</span>를 누르면 주간 요약/조언을 생성해요.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Footer actions */}
+                    <div className="mt-4 flex items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={closeReport}
+                        className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-extrabold text-gray-700 hover:bg-gray-50"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Optional: show included entries count */}
+                <div className="mt-4 text-[11px] font-semibold text-gray-500">
+                  Included entries: <span className="font-extrabold text-gray-700">{weekDiaryEntries.length}</span>
                 </div>
               </div>
             </div>

@@ -16,10 +16,7 @@ const hasApiKey = apiKey && apiKey.trim().length > 0;
 const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
 
 // GPT (mlapi.run) base URL & key for dashboard content generation
-const mlBaseUrl = (import.meta.env.VITE_MLAPI_BASE_URL as string | undefined)?.replace(
-  /\/+$/,
-  ""
-);
+const mlBaseUrl = (import.meta.env.VITE_MLAPI_BASE_URL as string | undefined)?.replace(/\/+$/, "");
 const mlApiKey = import.meta.env.VITE_SENTIMENT_API_KEY as string | undefined;
 
 // (구) 외부 감성분석 직접 호출은 제거하고, 백엔드 프록시 (/api/news-sentiment) 를 사용
@@ -41,7 +38,6 @@ function sleep(ms: number) {
 // Try to parse Gemini "Please retry in XXs." hints.
 function parseRetryAfterSeconds(err: any): number | null {
   const msg = String(err?.message || err);
-  // "Please retry in 34.78s."
   const m = msg.match(/retry in\s+([0-9.]+)s/i);
   if (!m?.[1]) return null;
   const sec = Number(m[1]);
@@ -82,7 +78,6 @@ function isOverloadedOrTransient(err: any): boolean {
 function toUserFacingError(err: any): Error {
   const msg = String(err?.message || err);
 
-  // If Gemini tells you retry time, keep it.
   if (isRateLimitOrQuota(err)) {
     const sec = parseRetryAfterSeconds(err) ?? 60;
     return new Error(`429: Rate limited. Please retry in ${sec}s.`);
@@ -92,7 +87,6 @@ function toUserFacingError(err: any): Error {
     return new Error("503: The AI service is temporarily overloaded. Please try again soon.");
   }
 
-  // Unknown
   return new Error(`AI_ERROR: ${msg}`);
 }
 
@@ -100,7 +94,6 @@ function looksCutOff(text: string, minChars = 80) {
   const t = (text || "").trim();
   if (!t) return true;
   if (t.length < minChars) return true;
-  // if it doesn't end like a finished sentence, might be cut off
   if (!/[.!?]["')\]]?$/.test(t)) return true;
   return false;
 }
@@ -114,9 +107,7 @@ async function generateWithRetry(
 ): Promise<string> {
   const maxOutputTokens = opts?.maxTokens ?? 320;
   const temperature = opts?.temperature ?? 0.6;
-
-  // Keep retries LOW to avoid burning quota (and triggering more 429s).
-  const maxRetries = opts?.maxRetries ?? 1; // 0 or 1 is usually best on client
+  const maxRetries = opts?.maxRetries ?? 1;
 
   let lastErr: any = null;
 
@@ -133,11 +124,10 @@ async function generateWithRetry(
     } catch (err) {
       lastErr = err;
 
-      // If rate-limited, do NOT keep retrying many times.
       if (isRateLimitOrQuota(err)) {
-        // Optional: wait a tiny bit once, but don't loop.
         if (i < maxRetries) {
           const sec = parseRetryAfterSeconds(err);
+          // keep UI snappy; don't sleep too long even if retry hint says longer
           const waitMs = sec ? Math.min(sec * 1000, 1200) : 600;
           await sleep(waitMs);
           continue;
@@ -145,7 +135,6 @@ async function generateWithRetry(
         throw toUserFacingError(err);
       }
 
-      // transient overload: allow small backoff retry
       if (isOverloadedOrTransient(err) && i < maxRetries) {
         await sleep(450 + i * 250);
         continue;
@@ -165,53 +154,171 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
     );
   }
 
-  const res = await fetch(`${mlBaseUrl}/chat/completions`, {
+  const url = `${mlBaseUrl}/chat/completions`;
+
+  const body = {
+    model: "openai/gpt-5-nano",
+    messages: [{ role: "user", content: prompt }],
+    // ✅ 서버가 max_completion_tokens를 무시하는 경우가 많아서 둘 다 보냄
+    max_completion_tokens: maxTokens,
+    stream: false,
+  };
+
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${mlApiKey}`,
     },
-    body: JSON.stringify({
-      model: "openai/gpt-5-nano",
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      max_completion_tokens: maxTokens,
-    }),
+    body: JSON.stringify(body),
   });
 
+  const raw = await res.text().catch(() => "");
+
+  // ✅ HTTP 레벨부터 로그
+  console.groupCollapsed("%c[MLAPI][chat] response", "color:#2563eb;font-weight:700");
+  console.log("url:", url);
+  console.log("status:", res.status, res.statusText);
+  console.log("raw preview:", raw.slice(0, 600));
+  console.groupEnd();
+
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    throw new Error(`HTTP ${res.status}: ${raw || res.statusText}`);
   }
 
-  const data: any = await res.json();
+  let data: any = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    throw new Error(`GPT returned non-JSON. Preview: ${raw.slice(0, 240)}`);
+  }
+
+  // ✅ 응답 구조 로그 (content 비어있을 때 원인 찾기용)
   const choice = data?.choices?.[0];
-  if (!choice) {
-    throw new Error("Empty GPT response.");
-  }
+  const finishReason = choice?.finish_reason;
+  console.groupCollapsed("%c[MLAPI][chat] parsed", "color:#16a34a;font-weight:700");
+  console.log("finish_reason:", finishReason);
+  console.log("choice keys:", choice ? Object.keys(choice) : null);
+  console.log("message keys:", choice?.message ? Object.keys(choice.message) : null);
+  console.log("full data preview:", JSON.stringify(data).slice(0, 900));
+  console.groupEnd();
 
+  // 1) 표준: message.content (string)
   const content = choice?.message?.content;
+
   if (typeof content === "string") {
     const trimmed = content.trim();
-    if (!trimmed) throw new Error("Empty GPT response content.");
+    if (!trimmed) throw new Error(`Empty GPT response content. finish_reason=${finishReason || "unknown"}`);
     return trimmed;
   }
 
-  // content 가 배열(part) 형태일 가능성도 방어
+  // 2) content가 배열로 오는 케이스 (파트 리스트)
   if (Array.isArray(content)) {
     const joined = content
-      .map((part: any) => (typeof part === "string" ? part : String(part?.text || "")))
+      .map((part: any) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        if (typeof part?.content === "string") return part.content;
+        return "";
+      })
       .join("")
       .trim();
-    if (!joined) throw new Error("Empty GPT response content.");
+
+    if (!joined) throw new Error(`Empty GPT response content[]. finish_reason=${finishReason || "unknown"}`);
     return joined;
   }
 
-  throw new Error("Unsupported GPT response format.");
+  // 3) 일부 서버는 choices[0].text 로 줄 때도 있음
+  if (typeof choice?.text === "string") {
+    const trimmed = choice.text.trim();
+    if (!trimmed) throw new Error(`Empty GPT choice.text. finish_reason=${finishReason || "unknown"}`);
+    return trimmed;
+  }
+
+  // 4) 여기까지 오면 구조가 예상 밖 → 전체를 에러로 던져서 디버그
+  throw new Error(`Unsupported GPT response format. Preview: ${JSON.stringify(data).slice(0, 600)}`);
+}
+
+
+
+/* -----------------------------
+ * JSON extraction (no code fences)
+ * ----------------------------- */
+function stripCodeFences(text: string): string {
+  const t = String(text || "").trim();
+  if (!t) return "";
+  if (t.startsWith("```")) {
+    const withoutFirst = t.replace(/^```[a-zA-Z0-9]*\s*/m, "");
+    const withoutLast = withoutFirst.replace(/```$/m, "");
+    return withoutLast.trim();
+  }
+  return t;
+}
+
+/**
+ * 텍스트에서 "첫 번째 JSON 블록" (object 또는 array)을 찾아 파싱
+ * - 문자열/이스케이프 고려해서 괄호 매칭
+ */
+function extractFirstJsonValue(text: string): any {
+  const cleaned = stripCodeFences(text);
+
+  // 1) 전체가 JSON이면 바로 파싱
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // fallthrough
+  }
+
+  const firstObj = cleaned.indexOf("{");
+  const firstArr = cleaned.indexOf("[");
+  const start =
+    firstObj === -1 ? firstArr : firstArr === -1 ? firstObj : Math.min(firstObj, firstArr);
+
+  if (start === -1) {
+    const preview = cleaned.slice(0, 240);
+    throw new Error(`Model did not return JSON. Preview: ${preview}`);
+  }
+
+  const openChar = cleaned[start];
+  const closeChar = openChar === "{" ? "}" : "]";
+
+  let i = start;
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+
+  for (; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+
+    if (inStr) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+
+    if (ch === openChar) depth++;
+    if (ch === closeChar) depth--;
+
+    if (depth === 0) {
+      const jsonStr = cleaned.slice(start, i + 1).trim();
+      return JSON.parse(jsonStr);
+    }
+  }
+
+  const preview = cleaned.slice(start, Math.min(cleaned.length, start + 300));
+  throw new Error(`JSON seems cut off. Preview: ${preview}`);
 }
 
 /* -----------------------------
@@ -249,181 +356,249 @@ Keep responses concise, encouraging, and educational. No direct "buy now" advice
     if (!text) throw new Error("Empty model response.");
     return text;
   } catch (err) {
-    // IMPORTANT: Throw so UI can stop loading and show a message
     throw toUserFacingError(err);
   }
 };
+
+/* -----------------------------------------
+ * ✅ Weekly Report (2-step to avoid cut-off)
+ *    - Prefer GPT (mlapi) to avoid Gemini quota/truncation
+ * ----------------------------------------- */
+/* -----------------------------------------
+ * ✅ Weekly Report (GPT-only, 2-step)
+ *   - Uses VITE_MLAPI_BASE_URL + (VITE_GPT_API_KEY || GPT_API_KEY)
+ * ----------------------------------------- */
+// services/geminiService.ts
+// Weekly report generator (OpenAI)
+// - Called from Diary.tsx via dynamic import: generateWeeklyReport(payload)
+// - Uses Vite env: VITE_GPT_API
+
+type WeeklyReportPayload = {
+  weekRange?: string;
+  metrics?: any;
+  entries?: any[];
+  persona?: any;
+};
+
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+
+/** Read API key safely (Vite env) */
+function getApiKey(): string {
+  // Primary: VITE_GPT_API (as you said)
+  const raw =
+    (import.meta as any).env?.VITE_GPT_API ??
+    // Optional fallback (in case you renamed at some point)
+    (import.meta as any).env?.VITE_GPT_API_KEY ??
+    (import.meta as any).env?.VITE_OPENAI_API_KEY;
+
+  const apiKey = String(raw ?? "").trim();
+
+  // Guard: prevents "Bearer undefined" → 401 verification_failed_key
+  if (!apiKey || apiKey === "undefined" || apiKey === "null") {
+    throw new Error(
+      `Missing OpenAI API key. Set VITE_GPT_API in .env.local and restart dev server. (current="${String(raw)}")`
+    );
+  }
+  return apiKey;
+}
+
+/** Small utility: avoid sending huge payloads */
+function compactPayload(payload: WeeklyReportPayload) {
+  const safe: WeeklyReportPayload = {
+    weekRange: payload?.weekRange ?? "",
+    metrics: payload?.metrics ?? {},
+    persona: payload?.persona ?? undefined,
+    entries: Array.isArray(payload?.entries) ? payload.entries : [],
+  };
+
+  // Limit entries to keep prompts small (prevents truncation/cutoff)
+  const entries = safe.entries ?? [];
+  const MAX_ENTRIES = 20;
+
+  const trimmed = entries
+    .slice()
+    .sort((a: any, b: any) => new Date(a?.date).getTime() - new Date(b?.date).getTime())
+    .slice(-MAX_ENTRIES)
+    .map((e: any) => ({
+      date: e?.date,
+      emotion: e?.emotion,
+      reason: e?.reason,
+      related_symbol: e?.related_symbol,
+      trade_type: e?.trade_type,
+      trade_qty: e?.trade_qty,
+      trade_price: e?.trade_price,
+      recheck_pct: e?.recheck_pct,
+      what_if: e?.what_if ? String(e.what_if).slice(0, 400) : "",
+      note: e?.note ? String(e.note).slice(0, 600) : "",
+    }));
+
+  safe.entries = trimmed;
+  return safe;
+}
+
+function safeJsonStringify(obj: any) {
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    // last resort
+    return String(obj);
+  }
+}
+
+/**
+ * ✅ Main function: called by Diary.tsx
+ * Returns: string (markdown) to render in <pre>
+ */
+export async function generateWeeklyReport(payload: WeeklyReportPayload): Promise<string> {
+  const apiKey = getApiKey();
+  const compact = compactPayload(payload);
+
+  const weekRange = compact.weekRange || "(unknown week)";
+  const entriesCount = Array.isArray(payload?.entries) ? payload!.entries!.length : 0;
+  const usedEntriesCount = Array.isArray(compact.entries) ? compact.entries.length : 0;
+
+  // System: style & constraints to prevent overly long output
+  const system = [
+    "You are an investing diary coach. Produce a weekly report in Korean.",
+    "Output MUST be markdown and short enough to fit without truncation.",
+    "No JSON. No code fences. No backticks. Avoid very long paragraphs.",
+    "Use concrete, actionable bullets. Be supportive but not overly verbose.",
+    "If there is little data, say so and give a minimal plan for next week.",
+  ].join(" ");
+
+  // User prompt includes metrics + entries
+  const user = [
+    `주간 투자일지 리포트를 생성해줘.`,
+    `주간 범위: ${weekRange}`,
+    ``,
+    `요청 컨텍스트(요약):`,
+    `- 원본 entries 수: ${entriesCount}`,
+    `- LLM에 전달된 entries 수(최근 ${usedEntriesCount}개): ${usedEntriesCount}`,
+    ``,
+    `아래 데이터를 근거로 리포트를 작성해줘.`,
+    `리포트 구성(섹션 제목 그대로 사용):`,
+    `1) 이번 주 한 줄 요약`,
+    `2) 지표 요약 (Coverage/Goal/Patterns 해석)`,
+    `3) 잘한 점 (2~4개)`,
+    `4) 리스크/경고 (2~4개)`,
+    `5) 다음 주 액션 플랜 (딱 5개, 체크리스트)`,
+    `6) Recheck 트리거가 있는 종목이 있다면: 무엇을 확인할지 질문 3개`,
+    ``,
+    `데이터(JSON):`,
+    safeJsonStringify(compact),
+  ].join("\n");
+
+  const body = {
+    model: "gpt-5-nano",
+    max_tokens: 500, // 길이 제한 (cut-off 방지)
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  };
+
+  // Timeout (avoid hanging)
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 25_000);
+
+  try {
+    const res = await fetch(OPENAI_CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    let json: any = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // If API returns non-JSON for some reason
+      if (!res.ok) throw new Error(`OpenAI error ${res.status}: ${text}`);
+      return text;
+    }
+
+    if (!res.ok) {
+      const msg =
+        json?.error?.message ||
+        json?.message ||
+        `OpenAI error ${res.status}: ${text}`;
+      throw new Error(msg);
+    }
+
+    const content = json?.choices?.[0]?.message?.content;
+    if (typeof content === "string" && content.trim()) return content.trim();
+
+    // Fallback: if structure differs
+    return safeJsonStringify(json);
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error("Weekly report generation timed out. Try again.");
+    }
+    throw new Error(String(err?.message || err));
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+
+
+
 
 export const generateDiaryFeedback = async (
   entry: DiaryEntry,
   user: UserProfile,
   recentTxs: any[] = [],
   recentDiaryLite: any[] = []
-): Promise<any> => {
+): Promise<string> => {
   const persona = PERSONA_DETAILS[user.persona];
 
-  // Keep context small to reduce token usage (less likely to hit quota)
   const compactTxs = (recentTxs || []).slice(0, 12);
   const compactDiary = (recentDiaryLite || []).slice(0, 8);
 
-  // ✅ Diary.tsx 에서 "모달에 보이는 전체 내용"을 entryContext로 넘길 수 있으므로
-  //    (기존 DiaryEntry 형태 + 확장 필드) 모두 방어적으로 지원
-  const e: any = entry as any;
-
-  const emotion = String(e?.emotionLabel || e?.emotion || "").trim() || "N/A";
-  const driver = String(e?.primaryDriverLabel || e?.driverLabel || e?.reason || "").trim() || "N/A";
-  const ticker = String(e?.ticker || e?.related_symbol || e?.relatedSymbol || "").trim() || "N/A";
-
-  const whatIf = String(e?.whatIf ?? e?.what_if ?? "").trim();
-  const note = String(e?.note ?? "").trim();
-
-  const tradeType = String(e?.trade?.type ?? e?.trade_type ?? "").trim();
-  const tradePrice = Number.isFinite(e?.trade?.price)
-    ? e.trade.price
-    : Number.isFinite(e?.trade_price)
-      ? e.trade_price
-      : null;
-  const tradeQty = Number.isFinite(e?.trade?.quantity)
-    ? e.trade.quantity
-    : Number.isFinite(e?.trade_qty)
-      ? e.trade_qty
-      : null;
-
-  const recheckPct =
-    typeof e?.recheckTriggerPct === "number" && Number.isFinite(e?.recheckTriggerPct)
-      ? e.recheckTriggerPct
-      : typeof e?.recheck_pct === "number" && Number.isFinite(e?.recheck_pct)
-        ? e.recheck_pct
-        : null;
-
-  const currentPrice = Number.isFinite(e?.performance?.currentPrice) ? e.performance.currentPrice : null;
-  const movePct = Number.isFinite(e?.performance?.movePct) ? e.performance.movePct : null;
-  const plVal = Number.isFinite(e?.performance?.unrealizedPL?.value) ? e.performance.unrealizedPL.value : null;
-  const plCcy = String(e?.performance?.unrealizedPL?.currency || "").trim() || null;
-  const recheckNow = typeof e?.performance?.recheckNow === "boolean" ? e.performance.recheckNow : null;
-
-  const tsKST = String(e?.timestampKST || "").trim();
-
-  // ✅ JSON-only contract for Diary.tsx normalizeFeedbackToText
-  const schemaHint = `
-Return ONLY one JSON object (no markdown, no backticks, no extra text).
-Use these exact keys and types:
-{
-  "oneLineSummary": string,
-  "fact": string[],
-  "interpretation": string[],
-  "actionTaken": string[],
-  "missingPieces": string[],
-  "biasChecklist": {"name": string, "evidenceSpan": string}[],
-  "oneQuestion": string
-}
-
-Rules:
-- Write in Korean.
-- Keep each array to max 3 items.
-- "evidenceSpan" must be a short quote/snippet (max 60 chars) from the user's entry fields.
-- "missingPieces" should list what's missing among: 근거/리스크(WHAT IF)/재평가 조건/포지션 사이징/대안 시나리오.
-- If information is not available, keep arrays empty rather than inventing.
-- "oneQuestion" must be exactly 1 question, actionable, based on the user's entry.
-- ABSOLUTELY DO NOT wrap output in markdown code fences like \`\`\`json ... \`\`\`.
-- Output must start with { and end with }.
-`.trim();
-
   const basePrompt = `
 You are a practical trading coach speaking directly to the user.
-Your job: turn this single diary entry (as shown in the UI) into:
-1) 요약, 2) 규칙·인지편향 체크, 3) 다음 기록 질문 1개.
+Write in a supportive, realistic tone. No price predictions. No buy/sell calls.
 
-User persona: ${persona.label} (${persona.description})
-Tone: ${persona.advice}
+Style rules:
+- Use 2nd person ("you").
+- Exactly 4 sentences, under 90 words total.
+- No bullet points.
+- End the final sentence with a period.
 
-Diary entry (UI fields):
-- Timestamp(KST): ${tsKST || "N/A"}
-- Emotion: ${emotion}
-- Driver: ${driver}
-- Ticker: ${ticker}
-- Trade: ${tradeType || "N/A"}${tradePrice !== null ? ` @ ${tradePrice}` : ""}${tradeQty !== null ? ` x ${tradeQty}` : ""}
-- WHAT IF: ${whatIf ? `"${whatIf.slice(0, 600)}"` : "N/A"}
-- PLAN (recheck %): ${recheckPct !== null ? String(recheckPct) : "N/A"}
-- Thoughts(note): "${note ? note.slice(0, 900) : ""}"
-
-Performance snapshot (if available):
-- Current price: ${currentPrice !== null ? String(currentPrice) : "N/A"}
-- Move% from entry: ${movePct !== null ? `${movePct.toFixed(2)}%` : "N/A"}
-- Unrealized P/L: ${plVal !== null ? `${plVal}${plCcy ? ` ${plCcy}` : ""}` : "N/A"}
-- RecheckNow triggered: ${recheckNow !== null ? String(recheckNow) : "N/A"}
-
+Context:
+Persona: ${persona.label}
+Emotion: ${entry.emotion}
+Driver: ${entry.reason}
+Ticker: ${entry.related_symbol || "N/A"}
+Note: "${(entry.note || "").slice(0, 800)}"
 Recent transactions (latest first): ${JSON.stringify(compactTxs)}
 Recent diary patterns: ${JSON.stringify(compactDiary)}
-
-${schemaHint}
 `.trim();
 
-  // ✅ Small helper: strips ```json ... ``` fences if the model wraps output
-  const stripCodeFences = (text: string): string => {
-    const t = (text || "").trim();
-    if (!t) return "";
-
-    // ```json ... ```
-    const fenced = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    if (fenced?.[1]) return fenced[1].trim();
-
-    // Sometimes model returns leading ```json without closing properly; try soft removal
-    return t.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
-  };
-
-  const tryParseJson = (text: string): any | null => {
-    const cleaned = stripCodeFences(text);
-    if (!cleaned) return null;
-
-    // 1) direct parse
-    try {
-      return JSON.parse(cleaned);
-    } catch {}
-
-    // 2) extract the first {...} block
-    const m = cleaned.match(/\{[\s\S]*\}/);
-    if (m?.[0]) {
-      try {
-        return JSON.parse(m[0]);
-      } catch {}
-    }
-
-    return null;
-  };
-
   try {
-    // ✅ maxRetries=1 (kept low to avoid quota burn)
-    let text = await generateWithRetry(basePrompt, { maxTokens: 420, temperature: 0.4, maxRetries: 1 });
+    let text = await generateWithRetry(basePrompt, { maxTokens: 220, temperature: 0.6, maxRetries: 1 });
 
-    // First parse attempt
-    let parsed = tryParseJson(text);
-
-    // If not JSON, do ONE strict rewrite attempt
-    if (!parsed) {
+    if (looksCutOff(text, 70)) {
       const rewritePrompt =
         basePrompt +
         `
 
-Your previous output was not valid JSON.
-Return ONLY the JSON object (no markdown, no backticks, no \`\`\` fences).
-Start with { and end with }.
+Your previous answer was cut off or too short.
+Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a period.
 `.trim();
 
-      text = await generateWithRetry(rewritePrompt, { maxTokens: 420, temperature: 0.2, maxRetries: 1 });
-      parsed = tryParseJson(text);
+      text = await generateWithRetry(rewritePrompt, { maxTokens: 240, temperature: 0.6, maxRetries: 1 });
     }
 
-    // If still not JSON, fall back to raw text (Diary.tsx normalize will still display safely)
-    if (!parsed) {
-      const out = (text || "").trim();
-      if (!out) throw new Error("Empty model response.");
-      return out;
-    }
-
-    return parsed;
+    const out = (text || "").trim();
+    if (!out) throw new Error("Empty model response.");
+    return out;
   } catch (err) {
-    // IMPORTANT: Throw so Diary.tsx can stop spinner in finally (no infinite loading)
     throw toUserFacingError(err);
   }
 };
@@ -447,11 +622,8 @@ export type DashboardQuiz = {
   explanation: string;
 };
 
-export const generateDashboardLearningCards = async (
-  count: number = 3,
-  seed?: number
-): Promise<LearningCard[]> => {
-  const safeCount = Math.max(1, Math.min(12, Math.floor(count))); // 1~12 cards per request
+export const generateDashboardLearningCards = async (count: number = 3, seed?: number): Promise<LearningCard[]> => {
+  const safeCount = Math.max(1, Math.min(12, Math.floor(count)));
   const params = new URLSearchParams();
   params.set("count", String(safeCount));
   if (typeof seed === "number") params.set("seed", String(seed));
@@ -495,11 +667,8 @@ export const generateDashboardLearningCards = async (
   }
 };
 
-export const generateDashboardQuizzes = async (
-  count: number = 3,
-  seed?: number
-): Promise<DashboardQuiz[]> => {
-  const safeCount = Math.max(1, Math.min(20, Math.floor(count))); // 1~20 questions per request
+export const generateDashboardQuizzes = async (count: number = 3, seed?: number): Promise<DashboardQuiz[]> => {
+  const safeCount = Math.max(1, Math.min(20, Math.floor(count)));
   const params = new URLSearchParams();
   params.set("count", String(safeCount));
   if (typeof seed === "number") params.set("seed", String(seed));
@@ -520,9 +689,7 @@ export const generateDashboardQuizzes = async (
     rawQuizzes.forEach((q: any) => {
       if (!q || typeof q !== "object") return;
       const question = String(q.question || "").trim();
-      const options = Array.isArray(q.options)
-        ? q.options.map((o: any) => String(o || "").trim()).filter(Boolean)
-        : [];
+      const options = Array.isArray(q.options) ? q.options.map((o: any) => String(o || "").trim()).filter(Boolean) : [];
       const correctIndex = Number.isInteger(q.correctIndex) ? Number(q.correctIndex) : -1;
       const explanation = String(q.explanation || "").trim();
 
@@ -550,165 +717,59 @@ export const generateDashboardQuizzes = async (
 
 type Sentiment = "positive" | "negative" | "neutral";
 
-// 기존 규칙 기반 감성분석 로직을 헬퍼로 분리 (외부 API 실패 시 fallback)
 function ruleBasedNewsSentiment(text: string): Sentiment {
   const lower = text.toLowerCase();
 
   const positiveKeywords = [
-    "surge",
-    "soar",
-    "rally",
-    "jump",
-    "spike",
-    "record high",
-    "all-time high",
-    "beat expectations",
-    "beats expectations",
-    "beat estimates",
-    "beats estimates",
-    "strong growth",
-    "strong demand",
-    "solid growth",
-    "better than expected",
-    "raises guidance",
-    "hikes guidance",
-    "upgrade",
-    "upgraded",
-    "buy rating",
-    "outperform",
-    "overweight",
-    "bullish",
-    "profit surge",
-    "rebound",
-    "recovery",
-    "top gainer",
-    "optimistic",
-    "beats on earnings",
-    "strong quarter",
-    "to buy",
-    "worth buying",
-    "buy now",
-    "top pick",
-    "could double",
-    "multi-bagger",
+    "surge","soar","rally","jump","spike","record high","all-time high",
+    "beat expectations","beats expectations","beat estimates","beats estimates",
+    "strong growth","strong demand","solid growth","better than expected",
+    "raises guidance","hikes guidance","upgrade","upgraded","buy rating",
+    "outperform","overweight","bullish","profit surge","rebound","recovery",
+    "top gainer","optimistic","beats on earnings","strong quarter",
+    "to buy","worth buying","buy now","top pick","could double","multi-bagger",
   ];
 
   const negativeKeywords = [
-    "plunge",
-    "plunges",
-    "slump",
-    "slumps",
-    "tumble",
-    "tumbles",
-    "fall",
-    "falls",
-    "drop",
-    "drops",
-    "sink",
-    "sinks",
-    "tank",
-    "tanks",
-    "crash",
-    "crashes",
-    "miss expectations",
-    "misses expectations",
-    "miss estimates",
-    "misses estimates",
-    "weak demand",
-    "slowdown",
-    "decline",
-    "loss",
-    "losses",
-    "cut guidance",
-    "cuts guidance",
-    "downgrade",
-    "downgraded",
-    "underperform",
-    "miss",
-    "warning",
-    "profit warning",
-    "lawsuit",
-    "scandal",
-    "probe",
-    "investigation",
-    "regulatory",
-    "fine",
-    "penalty",
-    "layoffs",
-    "job cuts",
-    "bankruptcy",
-    "concern",
-    "headwind",
+    "plunge","plunges","slump","slumps","tumble","tumbles","fall","falls","drop","drops",
+    "sink","sinks","tank","tanks","crash","crashes","miss expectations","misses expectations",
+    "miss estimates","misses estimates","weak demand","slowdown","decline","loss","losses",
+    "cut guidance","cuts guidance","downgrade","downgraded","underperform","miss","warning",
+    "profit warning","lawsuit","scandal","probe","investigation","regulatory","fine",
+    "penalty","layoffs","job cuts","bankruptcy","concern","headwind",
   ];
 
   let score = 0;
 
-  for (const kw of positiveKeywords) {
-    if (lower.includes(kw)) score += 1;
-  }
+  for (const kw of positiveKeywords) if (lower.includes(kw)) score += 1;
+  for (const kw of negativeKeywords) if (lower.includes(kw)) score -= 1;
 
-  for (const kw of negativeKeywords) {
-    if (lower.includes(kw)) score -= 1;
-  }
+  if (lower.includes("up") || lower.includes("higher") || lower.includes("gain") || lower.includes("rise")) score += 0.5;
+  if (lower.includes("down") || lower.includes("lower") || lower.includes("drop") || lower.includes("fall")) score -= 0.5;
 
-  if (
-    lower.includes("up") ||
-    lower.includes("higher") ||
-    lower.includes("gain") ||
-    lower.includes("rise")
-  ) {
-    score += 0.5;
-  }
-  if (
-    lower.includes("down") ||
-    lower.includes("lower") ||
-    lower.includes("drop") ||
-    lower.includes("fall")
-  ) {
-    score -= 0.5;
-  }
-
-  console.log(
-    "[Sentiment] Rule-based score:",
-    score,
-    "for text:",
-    lower.substring(0, 160)
-  );
+  console.log("[Sentiment] Rule-based score:", score, "for text:", lower.substring(0, 160));
 
   if (score >= 0.5) return "positive";
   if (score <= -0.5) return "negative";
   return "neutral";
 }
 
-// mlapi.run 응답(또는 LLM 출력 텍스트)에서 sentiment 라벨 뽑아내기
 function parseSentimentFromApiResponse(data: any): Sentiment | null {
   if (!data) return null;
 
   const candidates: string[] = [];
 
-  if (typeof data === "string") {
-    candidates.push(data);
-  }
-  if (typeof data.label === "string") {
-    candidates.push(data.label);
-  }
-  if (typeof (data as any).sentiment === "string") {
-    candidates.push((data as any).sentiment);
-  }
-  if (typeof (data as any).result === "string") {
-    candidates.push((data as any).result);
-  }
+  if (typeof data === "string") candidates.push(data);
+  if (typeof data.label === "string") candidates.push(data.label);
+  if (typeof (data as any).sentiment === "string") candidates.push((data as any).sentiment);
+  if (typeof (data as any).result === "string") candidates.push((data as any).result);
 
-  // {"positive":0.8,"negative":0.1,"neutral":0.1} 형태
   const probKeys = ["positive", "negative", "neutral"] as const;
   if (probKeys.every((k) => typeof (data as any)[k] === "number")) {
-    const best = probKeys.reduce((prev, cur) =>
-      (data as any)[cur] > (data as any)[prev] ? cur : prev
-    );
+    const best = probKeys.reduce((prev, cur) => ((data as any)[cur] > (data as any)[prev] ? cur : prev));
     return best;
   }
 
-  // HF-style: [{label:"POSITIVE", score:0.98}, ...]
   if (Array.isArray(data) && data.length > 0) {
     const first = data[0];
     if (typeof first === "string") {
@@ -717,8 +778,7 @@ function parseSentimentFromApiResponse(data: any): Sentiment | null {
       let best = first;
       if (typeof first.score === "number") {
         best = data.reduce(
-          (acc: any, cur: any) =>
-            typeof cur.score === "number" && cur.score > acc.score ? cur : acc,
+          (acc: any, cur: any) => (typeof cur.score === "number" && cur.score > acc.score ? cur : acc),
           first
         );
       }
@@ -731,17 +791,14 @@ function parseSentimentFromApiResponse(data: any): Sentiment | null {
     const trimmed = raw.trim();
     const lower = trimmed.toLowerCase();
 
-    // 영어 단어가 그대로 온 경우 (가장 우선)
     if (lower === "positive") return "positive";
     if (lower === "negative") return "negative";
     if (lower === "neutral") return "neutral";
 
-    // 한국어 단어 매핑
     if (lower.includes("긍정")) return "positive";
     if (lower.includes("부정")) return "negative";
     if (lower.includes("중립")) return "neutral";
 
-    // 기존 휴리스틱 (POS / NEG / NEU 등)
     if (lower.includes("pos")) return "positive";
     if (lower.includes("neg")) return "negative";
     if (lower.includes("neu") || lower.includes("neutral")) return "neutral";
@@ -750,53 +807,28 @@ function parseSentimentFromApiResponse(data: any): Sentiment | null {
   return null;
 }
 
-// 뉴스 감성분석: mlapi.run 호출 + 실패 시 규칙 기반 fallback
-export const analyzeNewsSentiment = async (
-  title: string,
-  summary: string,
-  relatedSymbols: string[]
-): Promise<Sentiment> => {
+export const analyzeNewsSentiment = async (title: string, summary: string, relatedSymbols: string[]): Promise<Sentiment> => {
   try {
-    // 백엔드 프록시 (/api/news-sentiment) 를 호출해서 감성 레이블만 받아옴
     const res = await fetch("http://localhost:5002/api/news-sentiment", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        title,
-        summary,
-        symbols: relatedSymbols,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, summary, symbols: relatedSymbols }),
     });
 
     if (!res.ok) {
       const errorBody = await res.text().catch(() => "");
-      console.error(
-        "[Sentiment] /api/news-sentiment error:",
-        res.status,
-        errorBody || "<empty body>"
-      );
+      console.error("[Sentiment] /api/news-sentiment error:", res.status, errorBody || "<empty body>");
       throw new Error(`News sentiment HTTP error: ${res.status}`);
     }
 
     const data = await res.json();
     const raw = String((data as any)?.sentiment || "").toLowerCase();
-    if (raw === "positive" || raw === "negative" || raw === "neutral") {
-      return raw;
-    }
+    if (raw === "positive" || raw === "negative" || raw === "neutral") return raw;
 
-    console.warn(
-      "[Sentiment] Unknown sentiment label from backend, falling back to neutral:",
-      raw
-    );
+    console.warn("[Sentiment] Unknown sentiment label from backend, falling back to neutral:", raw);
     return "neutral";
   } catch (err) {
-    console.error(
-      "[Sentiment] Backend sentiment error, using neutral fallback:",
-      err
-    );
-    // 외부 API 오류 시에도 neutral 로 고정
+    console.error("[Sentiment] Backend sentiment error, using neutral fallback:", err);
     return "neutral";
   }
 };
