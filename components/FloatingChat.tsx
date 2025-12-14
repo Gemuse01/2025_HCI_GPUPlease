@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../contexts/AppContext';
-import { generateFinancialAdvice } from '../services/geminiService';
+import { generateFinancialAdvice } from '../services/mentorService';
 import { Send, Bot, User, Loader2, MessageCircle, X, Maximize2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Link } from 'react-router-dom';

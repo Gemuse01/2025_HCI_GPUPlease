@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../contexts/AppContext';
-import { generateFinancialAdvice } from '../services/geminiService';
-import { generateSecurityAdvice } from '../services/securityService';
+import { generateFinancialAdvice, generateSecurityAdvice } from '../services/mentorService';
 import {
   Send,
   Bot,

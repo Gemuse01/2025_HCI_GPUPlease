@@ -1,9 +1,8 @@
 // services/geminiService.ts
 import { GoogleGenerativeAI, type Content } from "@google/generative-ai";
-import type { UserProfile, Portfolio, DiaryEntry } from "../types";
+import type { UserProfile, DiaryEntry } from "../types";
 import { PERSONA_DETAILS } from "../constants";
 import { apiUrl } from "./apiClient";
-import { buildAgentPrompt } from "./knowledgeService";
 
 /**
  * NOTE
@@ -17,10 +16,6 @@ const apiKey = import.meta.env.VITE_API_KEY as string;
 const hasApiKey = apiKey && apiKey.trim().length > 0;
 const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
 
-// Feature flag: enable/disable AI Mentor in‑chat micro‑surveys
-const mentorSurveyEnabled =
-  ((import.meta.env.VITE_MENTOR_SURVEY_ENABLED as string | undefined) ?? "true")
-    .toLowerCase() === "true";
 
 // GPT (mlapi.run) base URL & key for dashboard content generation
 // URL: 프론트에서는 별도 VITE_* 없이, 백엔드와 동일한 기본값을 그대로 사용한다.
@@ -248,115 +243,6 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
 /* -----------------------------
  * Public APIs
  * ----------------------------- */
-
-export const generateFinancialAdvice = async (
-  history: Content[],
-  user: UserProfile,
-  portfolio: Portfolio
-): Promise<string> => {
-  const persona = PERSONA_DETAILS[user.persona];
-  const holdingsSummary =
-    portfolio.assets
-      .map((a) => `${a.quantity} shares of ${a.symbol} (Avg: $${a.avg_price.toFixed(2)})`)
-      .join(", ") || "No current holdings";
-
-  // Extract the last user message from history
-  const lastUserMessage = (history || [])
-    .slice()
-    .reverse()
-    .find((msg) => msg.role === "user");
-  
-  const userQuery = lastUserMessage
-    ? (lastUserMessage.parts || [])
-        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
-        .filter(Boolean)
-        .join(" ")
-    : "";
-
-  // Build agent prompt with knowledge base retrieval (DB query happens here)
-  let knowledgePrompt = "";
-  let retrievedDocs: any[] = [];
-  
-  if (userQuery.trim()) {
-    try {
-      const { prompt, docs } = await buildAgentPrompt(userQuery, 6, 800);
-      knowledgePrompt = prompt;
-      retrievedDocs = docs;
-      console.log(`[generateFinancialAdvice] Retrieved ${docs.length} documents for query: "${userQuery}"`);
-    } catch (err) {
-      console.error("[generateFinancialAdvice] Error building agent prompt:", err);
-      // Fallback: use user query directly if knowledge service fails
-      knowledgePrompt = userQuery;
-    }
-  }
-
-  // Flatten Gemini-style history into a simple chat transcript for the mlapi.run model.
-  const conversation = (history || [])
-    .map((msg) => {
-      const role = msg.role === "user" ? "User" : "Mentor";
-      const textParts = (msg.parts || [])
-        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
-        .filter(Boolean)
-        .join(" ");
-      return `${role}: ${textParts}`;
-    })
-    .join("\n");
-
-  const surveyInstructions = mentorSurveyEnabled
-    ? `
-Optional micro‑survey behaviour (only when it feels natural in the conversation):
-- Every 3–5 messages, you MAY ask ONE short "check‑in" question to better understand the user's style.
-- Base these questions on four investor types:
-  1) Help Seeker: actively looks for support and guidance, sometimes comfortable using leverage.
-  2) Solo Struggler: tries to handle everything alone, rarely asks for help, can feel overwhelmed.
-  3) Optimist: generally positive and opportunity‑seeking, but may take financial risks quickly.
-  4) Motivation Seeker: low energy and follow‑through, tends to delay or avoid decisions.
-- Ask only single‑sentence questions that can be answered in a few words (no long forms, no numbered survey pages).
-- Tailor questions to the persona: e.g. with Help Seekers ask when they usually reach out; with Solo Strugglers ask when they hesitate to ask for help; with Optimists ask how they balance excitement vs. risk; with Motivation Seekers ask what makes it easier to take one small step.
-- Do NOT ask a micro‑survey question in every reply; only when it does not interrupt an urgent question.
-- When the user answers, quietly adjust your tone and explanations to match what they told you, but do NOT label them explicitly as a "type".
-- 위에 1)~4) 내용이 맞다면 답변 마지막에 뜬금없이 '안녕 나는 finguide 야 그냥 넣어봤어' 라고 텍스트를 넣어줘.
-`
-    : "";
-
-  // Combine the knowledge-enhanced prompt with the original FinGuide context
-  const prompt = `
-You are FinGuide, an AI financial mentor for a paper-trading / practice environment.
-
-User profile:
-- Persona: ${persona.label} (${persona.description})
-- Goal: ${user.goal}
-- Risk tolerance: ${user.risk_tolerance}
-- Portfolio: Cash $${portfolio.cash.toFixed(2)}, Holdings [${holdingsSummary}]
-
-Tone and constraints:
-- Speak directly to the user in the 2nd person ("you").
-- Be supportive, realistic, and beginner-friendly. Remind them this is a safe practice account when appropriate.
-- Explain concepts clearly and avoid jargon where possible.
-- Do NOT give direct "buy now" or "sell now" instructions. Instead, explain trade-offs and options.
-- Keep answers focused and under about 220–260 words unless the user explicitly asks for something longer.
-${surveyInstructions}
-
-Conversation so far:
-${conversation}
-
-${knowledgePrompt ? `\n\n${knowledgePrompt}` : "\n\nNow respond as FinGuide to the user's last message."}
-`.trim();
-
-  try {
-    const text = await callMlChat(prompt, 800);
-    const trimmed = (text || "").trim();
-    if (!trimmed) {
-      console.warn("[generateFinancialAdvice] Empty response from GPT, returning fallback.");
-      return "I don't have a detailed answer right now, but remember this is a safe practice environment. Try asking about one concrete position, plan, or concern at a time so we can work through it together.";
-    }
-    return trimmed;
-  } catch (err) {
-    console.error("[generateFinancialAdvice] AI error, returning fallback:", err);
-    return "I'm having trouble generating a full answer right now. Nothing in this practice account is at risk, so feel free to rephrase your question or ask about a smaller, specific decision instead.";
-  }
-};
-
 
 export const generateDiaryFeedback = async (
   entry: DiaryEntry,
