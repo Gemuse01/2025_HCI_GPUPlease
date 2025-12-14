@@ -4,6 +4,7 @@ import yfinance as yf
 import time
 import os
 import json
+import re
 
 from qwen_client import call_qwen_finsec_model, build_security_prompt
 from openai import OpenAI
@@ -95,24 +96,27 @@ def search_stocks():
     results = []
     query_upper = query.upper()
     
-    # 1. 심볼 기반 후보 생성 (기존 로직)
+    # 1. 심볼 기반 후보 생성
     nasdaq_symbols = [query_upper]
     korean_symbols = []
 
-    # 이미 .KS, .KQ가 붙어있으면 그대로 사용하고 나스닥은 제외
+    # (1) 이미 .KS, .KQ가 붙어있으면 그대로 사용하고 나스닥은 제외
     if query_upper.endswith('.KS') or query_upper.endswith('.KQ'):
         korean_symbols = [query_upper]
         nasdaq_symbols = []
-    elif query.isdigit() and len(query) == 6:
-        # 6자리 숫자면 .KS와 .KQ 둘 다 시도
-        korean_symbols = [f"{query}.KS", f"{query}.KQ"]
-    elif query.isdigit() and len(query) < 6:
-        # 6자리 미만 숫자면 앞에 0을 붙여서 6자리로 만들고 시도
-        padded_query = query.zfill(6)
-        korean_symbols = [f"{padded_query}.KS", f"{padded_query}.KQ"]
+    # (2) 공백/텍스트에 섞여 있는 6자리 숫자 추출 (예: "삼성전자 005930")
     else:
-        # 그 외는 나스닥 심볼로 가정 (예: AAPL, TSLA)
-        nasdaq_symbols = [query_upper]
+        m = re.search(r"\d{6}", query)
+        code = m.group(0) if m else None
+        if code:
+            korean_symbols = [f"{code}.KS", f"{code}.KQ"]
+        elif query.isdigit() and len(query) < 6:
+            # 6자리 미만 숫자면 앞에 0을 붙여서 6자리로 만들고 시도
+            padded_query = query.zfill(6)
+            korean_symbols = [f"{padded_query}.KS", f"{padded_query}.KQ"]
+        else:
+            # 그 외는 나스닥 심볼로 가정 (예: AAPL, TSLA, TSLA.US)
+            nasdaq_symbols = [query_upper]
     
     all_symbols = nasdaq_symbols + korean_symbols
 
@@ -493,6 +497,13 @@ SENTIMENT_API_URL = os.getenv(
     "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1",
 )
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
+
+openai_client = (
+    OpenAI(base_url=SENTIMENT_API_URL, api_key=SENTIMENT_API_KEY)
+    if SENTIMENT_API_KEY
+    else None
+)
+
 
 openai_client = (
     OpenAI(base_url=SENTIMENT_API_URL, api_key=SENTIMENT_API_KEY)

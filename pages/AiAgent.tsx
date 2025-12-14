@@ -88,7 +88,7 @@ How can I support your journey today?`,
           },
         ]);
       } else {
-        // 💬 일반 모드 → 기존 Gemini 호출
+        // 💬 일반 모드 → Gemini/GPT 기반 멘토 호출
         const historyForApi = messages.concat(userMsg).map((m) => ({
           role: m.role,
           parts: [{ text: m.text }],

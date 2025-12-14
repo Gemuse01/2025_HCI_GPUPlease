@@ -336,23 +336,42 @@ const Dashboard: React.FC = () => {
           </p>
         </div>
 
-        {/* Cash Card */}
+        {/* Cash Card (USD + KRW) */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 min-w-0">
-           <div className="flex items-center justify-between mb-3 gap-2">
-            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">Available Cash</h3>
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">
+              Available Cash
+            </h3>
             <div className="p-1.5 bg-green-50 text-green-600 rounded-lg shrink-0">
               <Wallet size={16} />
             </div>
           </div>
-          <p className="text-lg sm:text-xl md:text-2xl font-extrabold text-gray-900 mb-2 truncate" title={`$${portfolio.cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}>
-            ${portfolio.cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {/* USD balance */}
+          <p
+            className="text-lg sm:text-xl md:text-2xl font-extrabold text-gray-900 truncate"
+            title={`$${portfolio.cash.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`}
+          >
+            ${portfolio.cash.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
           </p>
-          <div className="flex items-center text-xs font-medium text-gray-500">
-             <span>Ready to deploy</span>
+          {/* KRW balance */}
+          <p
+            className="text-sm sm:text-base font-extrabold text-gray-900 mt-1 truncate"
+            title={`₩${portfolio.cash_krw.toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            })}`}
+          >
+            ₩{portfolio.cash_krw.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </p>
+          <div className="mt-2 text-[11px] text-gray-500">
+            <p className="font-medium">Ready to deploy in your practice accounts.</p>
+            <p>Top: virtual USD cash · Bottom: virtual KRW cash for Korean stocks.</p>
           </div>
-          <p className="mt-1 text-[11px] text-gray-500">
-            Virtual USD cash available to allocate into new trades.
-          </p>
         </div>
 
         {/* Market Status Card */}

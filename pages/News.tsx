@@ -3,6 +3,8 @@ import { NewsItem } from '../types';
 import { Newspaper, TrendingUp, TrendingDown, Minus, Clock, Tag, RefreshCw, ExternalLink, X } from 'lucide-react';
 import { analyzeNewsSentiment } from '../services/geminiService';
 
+const LS_NEWS_KEY = 'market_news_v1';
+
 const News: React.FC = () => {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,6 +34,7 @@ const News: React.FC = () => {
     setError(null);
     try {
       const trimmed = symbol?.trim();
+      const isDefaultFeed = !trimmed;
       const url = trimmed
         ? `http://localhost:5002/api/news?symbol=${encodeURIComponent(trimmed)}`
         : 'http://localhost:5002/api/news';
@@ -89,6 +92,18 @@ const News: React.FC = () => {
             return true;
           });
         setNews(formattedNews);
+
+        // Cache only the default (no-symbol) feed for faster first load
+        if (isDefaultFeed && typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem(
+              LS_NEWS_KEY,
+              JSON.stringify({ news: formattedNews }),
+            );
+          } catch {
+            // ignore cache errors
+          }
+        }
         
         // 각 뉴스에 대해 감성분석 수행 (비동기)
         // 예전에는 무료 티어 rate limit 때문에 5개만 분석했지만,
@@ -157,7 +172,43 @@ const News: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchNews();
+    let usedCache = false;
+
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = window.localStorage.getItem(LS_NEWS_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored) as { news?: NewsItem[] } | NewsItem[];
+          let cachedNews: NewsItem[] | null = null;
+
+          if (Array.isArray(parsed)) {
+            cachedNews = parsed;
+          } else if (parsed && Array.isArray(parsed.news)) {
+            cachedNews = parsed.news;
+          }
+
+          if (cachedNews && cachedNews.length > 0) {
+            setNews(cachedNews);
+            setIsLoading(false);
+            usedCache = true;
+
+            // Even when using cached news, we still want fresh sentiment analysis
+            // to run in the background so that impact badges update gradually.
+            cachedNews.forEach((item: NewsItem, index: number) => {
+              setTimeout(() => {
+                analyzeNewsItem(item);
+              }, index * 2000);
+            });
+          }
+        }
+      } catch {
+        // ignore JSON / localStorage errors and fall back to network
+      }
+    }
+
+    if (!usedCache) {
+      fetchNews();
+    }
   }, []);
 
   const handleSearch = async () => {

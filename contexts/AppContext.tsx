@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { AppContextType, AppState, UserProfile, DiaryEntry, Transaction, MarketCondition } from '../types';
+import { AppContextType, AppState, UserProfile, DiaryEntry, Transaction, MarketCondition, NewsItem } from '../types';
 import { DEFAULT_STATE } from '../constants';
+import { generateDashboardLearningCards, generateDashboardQuizzes } from '../services/geminiService';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -28,6 +29,135 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
+
+  // Prefetch AI-generated learning content in the background on first app load.
+  // This warms up the "Learning" page so that the first visit feels instant
+  // (it will read from localStorage instead of waiting for a fresh API call).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const LS_LEARNING_KEY = 'dashboard_learning_v1';
+    const LS_QUIZ_KEY = 'dashboard_quizzes_v1';
+    const LS_NEWS_KEY = 'market_news_v1';
+
+    const prefetch = async () => {
+      try {
+        // Prefetch learning cards if no cache exists yet
+        try {
+          const stored = window.localStorage.getItem(LS_LEARNING_KEY);
+          if (!stored) {
+            const cards = await generateDashboardLearningCards(3);
+            window.localStorage.setItem(
+              LS_LEARNING_KEY,
+              JSON.stringify({ seed: 0, cards })
+            );
+          }
+        } catch (err) {
+          // Swallow errors so the app shell never breaks because of AI issues
+          console.warn('[AppProvider] Failed to prefetch learning cards:', err);
+        }
+
+        // Prefetch quizzes if no cache exists yet
+        try {
+          const storedQuizzes = window.localStorage.getItem(LS_QUIZ_KEY);
+          if (!storedQuizzes) {
+            const quizzes = await generateDashboardQuizzes(3);
+            window.localStorage.setItem(
+              LS_QUIZ_KEY,
+              JSON.stringify({ seed: 0, quizzes })
+            );
+          }
+        } catch (err) {
+          console.warn('[AppProvider] Failed to prefetch quizzes:', err);
+        }
+
+        // Prefetch default market news list (no symbol filter) if no cache exists yet
+        try {
+          const storedNews = window.localStorage.getItem(LS_NEWS_KEY);
+          if (!storedNews) {
+            const res = await fetch('http://localhost:5002/api/news');
+            if (res.ok) {
+              const data: any = await res.json();
+              const raw = Array.isArray(data?.news) ? data.news : [];
+
+              if (raw.length > 0) {
+                const seenIds = new Set<string>();
+                const seenTitleSource = new Set<string>();
+
+                const formatted: NewsItem[] = raw
+                  .map((item: any, index: number) => {
+                    let newsId =
+                      item.id ||
+                      `${Date.now()}_${index}_${Math.random()
+                        .toString(36)
+                        .substr(2, 9)}`;
+                    if (seenIds.has(newsId)) {
+                      newsId = `${Date.now()}_${index}_${Math.random()
+                        .toString(36)
+                        .substr(2, 9)}`;
+                    }
+                    seenIds.add(newsId);
+
+                    const timestamp = typeof item.date === 'number' ? item.date : 0;
+                    const date = timestamp ? new Date(timestamp * 1000) : null;
+
+                    const rawSymbols = Array.isArray(item.related_symbols)
+                      ? item.related_symbols
+                      : [];
+                    const cleanedSymbols = Array.from(
+                      new Set(
+                        rawSymbols
+                          .map((s: string) => (s || '').trim())
+                          .filter(Boolean)
+                          .map((s: string) =>
+                            /^[a-zA-Z0-9.]+$/.test(s) ? s.toUpperCase() : s,
+                          ),
+                      ),
+                    );
+
+                    const title: string = (item.title || '').trim();
+                    const source: string = (item.source || '').trim();
+                    const titleKey = title.toLowerCase();
+                    const sourceKey = source.toLowerCase();
+                    if (!titleKey) return null;
+                    const composite = `${titleKey}|${sourceKey}`;
+                    if (seenTitleSource.has(composite)) {
+                      return null;
+                    }
+                    seenTitleSource.add(composite);
+
+                    return {
+                      ...(item as any),
+                      id: newsId,
+                      title,
+                      source,
+                      date: date ? date.toLocaleDateString() : 'Recently',
+                      impact: item.impact || 'neutral',
+                      related_symbols: cleanedSymbols,
+                    } as NewsItem;
+                  })
+                  .filter(Boolean) as NewsItem[];
+
+                if (formatted.length > 0) {
+                  window.localStorage.setItem(
+                    LS_NEWS_KEY,
+                    JSON.stringify({ news: formatted }),
+                  );
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[AppProvider] Failed to prefetch market news:', err);
+        }
+      } catch {
+        // Top-level safety: never block app load due to prefetch
+      }
+    };
+
+    // Fire and forget – no need to await
+    prefetch();
+  }, []);
 
   const updateUser = useCallback((userData: Partial<UserProfile>) => {
     setState(prev => ({ ...prev, user: { ...prev.user, ...userData } }));

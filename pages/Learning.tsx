@@ -70,6 +70,7 @@ const DEFAULT_LEARNING_CARDS: LearningCard[] = [
 
 const LS_LEARNING_KEY = 'dashboard_learning_v1';
 const LS_LEARNING_MISSIONS_KEY = 'learning_missions_v1';
+const LS_QUIZ_KEY = 'dashboard_quizzes_v1';
 
 const Learning: React.FC = () => {
   const { user } = useApp();
@@ -85,22 +86,22 @@ const Learning: React.FC = () => {
   const [isLoadingQuiz, setIsLoadingQuiz] = useState(false);
   const [learningSeed, setLearningSeed] = useState(0);
   const [quizSeed, setQuizSeed] = useState(0);
-  const [learningInitialized, setLearningInitialized] = useState(false);
-  const [quizInitialized, setQuizInitialized] = useState(false);
 
-  // Load / regenerate learning cards (with localStorage cache to persist across page changes)
+  // Load / regenerate learning cards
+  // - On seed === 0, try localStorage cache first (warmed up by AppProvider prefetch)
+  // - On other seeds (Regenerate), always hit the API
   React.useEffect(() => {
     let cancelled = false;
 
     const loadLearning = async () => {
-      if (!learningInitialized && typeof window !== 'undefined') {
+      // First try cache when using the default seed (0)
+      if (learningSeed === 0 && typeof window !== 'undefined') {
         try {
           const stored = window.localStorage.getItem(LS_LEARNING_KEY);
           if (stored) {
             const parsed = JSON.parse(stored) as { seed?: number; cards?: LearningCard[] };
             if (parsed && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
               setLearningCards(parsed.cards);
-              setLearningInitialized(true);
               return;
             }
           }
@@ -114,7 +115,6 @@ const Learning: React.FC = () => {
         const cards = await generateDashboardLearningCards(3, learningSeed);
         if (!cancelled && cards && cards.length > 0) {
           setLearningCards(cards);
-          setLearningInitialized(true);
           if (typeof window !== 'undefined') {
             try {
               window.localStorage.setItem(LS_LEARNING_KEY, JSON.stringify({ seed: learningSeed, cards }));
@@ -135,19 +135,46 @@ const Learning: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [learningSeed, learningInitialized]);
+  }, [learningSeed]);
 
-  // Load / regenerate quiz questions (always fresh per visit/seed, no localStorage persistence)
+  // Load / regenerate quiz questions
+  // - On seed === 0, try localStorage cache first (warmed up by AppProvider prefetch)
+  // - On other seeds (Regenerate), always hit the API
   React.useEffect(() => {
     let cancelled = false;
 
     const loadQuizzes = async () => {
+      // First try cache when using the default seed (0)
+      if (quizSeed === 0 && typeof window !== 'undefined') {
+        try {
+          const stored = window.localStorage.getItem(LS_QUIZ_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as { seed?: number; quizzes?: DashboardQuiz[] };
+            if (parsed && Array.isArray(parsed.quizzes) && parsed.quizzes.length > 0) {
+              setQuizPool(parsed.quizzes);
+              return;
+            }
+          }
+        } catch {
+          // ignore JSON / localStorage errors
+        }
+      }
+
       setIsLoadingQuiz(true);
       try {
         const quizzes = await generateDashboardQuizzes(3, quizSeed);
         if (!cancelled && quizzes && quizzes.length > 0) {
           setQuizPool(quizzes);
-          setQuizInitialized(true);
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.setItem(
+                LS_QUIZ_KEY,
+                JSON.stringify({ seed: quizSeed, quizzes }),
+              );
+            } catch {
+              // ignore
+            }
+          }
         }
       } catch (err) {
         console.warn('[Learning] quizzes AI error (fallback to defaults):', err);

@@ -324,6 +324,7 @@ Now respond as FinGuide to the user's last message.
   }
 };
 
+
 export const generateDiaryFeedback = async (
   entry: DiaryEntry,
   user: UserProfile,
@@ -357,10 +358,10 @@ Recent diary patterns: ${JSON.stringify(compactDiary)}
 `.trim();
 
   try {
-    // ✅ maxRetries=1 (kept low to avoid quota burn)
-    let text = await generateWithRetry(basePrompt, { maxTokens: 220, temperature: 0.6, maxRetries: 1 });
+    // ✅ Diary feedback도 GPT(mlapi.run) 기반으로 생성
+    let text = await callMlChat(basePrompt, 260);
 
-    // If looks cut off, ONE rewrite attempt (still maxRetries=1 inside)
+    // 답변이 잘려 보이면 한 번만 재작성 요청
     if (looksCutOff(text, 70)) {
       const rewritePrompt =
         basePrompt +
@@ -370,7 +371,7 @@ Your previous answer was cut off or too short.
 Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a period.
 `.trim();
 
-      text = await generateWithRetry(rewritePrompt, { maxTokens: 240, temperature: 0.6, maxRetries: 1 });
+      text = await callMlChat(rewritePrompt, 260);
     }
 
     const out = (text || "").trim();
