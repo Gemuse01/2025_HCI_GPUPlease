@@ -29,7 +29,7 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
   }, []);
 
   const handleLogout = () => {
-    if (window.confirm('정말 로그아웃하시겠습니까? 모든 데이터(포트폴리오, 거래 내역, 일기 등)가 초기화됩니다.')) {
+    if (window.confirm('Are you sure you want to log out? All data (portfolio, transaction history, diary entries, etc.) will be reset.')) {
       resetApp();
       navigate('/onboarding');
       setIsDropdownOpen(false);
@@ -37,7 +37,7 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
   };
 
   const handleResetPersona = () => {
-    if (window.confirm('페르소나를 재설정하시겠습니까? 포트폴리오와 거래 내역은 유지되고 사용자 정보만 초기화됩니다.')) {
+    if (window.confirm('Would you like to reset your persona? Your portfolio and transaction history will be kept, and only your user information will be reset.')) {
       // 사용자 정보만 초기화하고 포트폴리오, 거래 내역, 일기는 유지
       updateUser({
         name: '',
@@ -96,7 +96,7 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                >
                  <UserCog size={18} className="text-gray-400" />
-                 <span>페르소나 재설정</span>
+                 <span>Reset Persona</span>
                </button>
                <div className="border-t border-gray-100 my-1"></div>
                <button
@@ -104,7 +104,7 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
                >
                  <LogOut size={18} className="text-red-400" />
-                 <span>로그아웃</span>
+                 <span>Log Out</span>
                </button>
              </div>
            )}

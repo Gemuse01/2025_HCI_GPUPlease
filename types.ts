@@ -33,7 +33,8 @@ export interface Asset {
 }
 
 export interface Portfolio {
-  cash: number;
+  cash: number; // USD
+  cash_krw: number; // KRW
   assets: Asset[];
   total_value_history: { date: string; value: number }[];
 }
@@ -65,6 +66,8 @@ export interface NewsItem {
   summary: string;
   impact: 'positive' | 'negative' | 'neutral';
   related_symbols: string[];
+  link?: string;
+  fullText?: string;
 }
 
 export interface AppState {

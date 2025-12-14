@@ -1,6 +1,7 @@
 import { Stock, UserPersona, AppState, NewsItem } from "./types";
 
 export const INITIAL_CAPITAL = 100000; // $100k virtual money
+export const INITIAL_CAPITAL_KRW = 100000000; // 1억원 virtual money
 
 export const DEFAULT_STATE: AppState = {
   user: {
@@ -13,6 +14,7 @@ export const DEFAULT_STATE: AppState = {
   },
   portfolio: {
     cash: INITIAL_CAPITAL,
+    cash_krw: INITIAL_CAPITAL_KRW,
     assets: [],
     total_value_history: [
       { date: '2024-05-01', value: INITIAL_CAPITAL },
@@ -115,20 +117,95 @@ export const MOCK_STOCK_ANALYSIS: Record<string, string> = {
 };
 
 export const MOCK_DAILY_ADVICE = [
-  "Markets look stable today. It's a good time to review your watchlist and ensure you're comfortable with your current risk levels.",
-  "Volatility is slightly up. Remember your long-term goals and avoid making impulsive decisions based on short-term noise.",
-  "Tech sector is showing strength. Consider if your portfolio needs rebalancing, but don't chase rallies blindly.",
-  "Remember, cash is also a position. Don't feel pressured to invest everything at once if you're unsure about the market direction."
+  // 하루에 하나씩 보여줄 실전형 팁
+  "Before opening new positions today, check if any single stock exceeds 20% of your total portfolio. If it does, think about diversification.",
+  "Volatility is slightly up. Avoid averaging down repeatedly on losers; instead, review your initial thesis and risk limit.",
+  "Earnings season is coming. For stocks on your watchlist, skim the last quarter's results and guidance before reacting to headlines.",
+  "Remember, cash is also a position. If you feel emotional or tired, it's better to pause trading than to force a decision.",
+  "For Korean stocks, check whether your idea depends heavily on a single macro theme (e.g., semiconductors, EV). Concentrated themes can reverse quickly.",
+  "If a stock doubled in a short time, ask yourself: if I had only cash today, would I still buy it here? If not, consider trimming.",
 ];
 
-export const MOCK_DAILY_QUIZ = {
-  question: "What typically happens to bond prices when interest rates rise?",
-  options: [
-    "Bond prices rise",
-    "Bond prices fall",
-    "Bond prices stay the same",
-    "Stock prices always fall simultaneously"
-  ],
-  correctIndex: 1,
-  explanation: "Bond prices and interest rates have an inverse relationship. When new bonds are issued with higher interest rates, existing bonds with lower rates become less attractive to investors, driving their market prices down."
+export type DailyQuiz = {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
 };
+
+// 실제 금융/투자 개념 기반 퀴즈 여러 개 (하루에 하나씩 로테이션)
+export const DAILY_QUIZZES: DailyQuiz[] = [
+  {
+    question: "What typically happens to bond prices when interest rates rise?",
+    options: [
+      "Bond prices rise",
+      "Bond prices fall",
+      "Bond prices stay the same",
+      "Stock prices always fall simultaneously",
+    ],
+    correctIndex: 1,
+    explanation:
+      "Bond prices and interest rates have an inverse relationship. When new bonds are issued with higher rates, existing bonds with lower coupons become less attractive, so their market prices fall.",
+  },
+  {
+    question: "Which description best explains a diversified portfolio?",
+    options: [
+      "Putting all money into one high‑conviction stock",
+      "Holding multiple stocks from different sectors and regions",
+      "Keeping only cash in a savings account",
+      "Buying and selling the same stock repeatedly",
+    ],
+    correctIndex: 1,
+    explanation:
+      "Diversification means spreading investments across sectors, regions and asset classes so that a single event does not dominate your total return.",
+  },
+  {
+    question: "In the Korean stock market, what does '005930.KS' represent?",
+    options: [
+      "A US‑listed ADR",
+      "A KOSDAQ growth stock",
+      "A KOSPI‑listed company ticker with exchange suffix",
+      "An unlisted OTC stock",
+    ],
+    correctIndex: 2,
+    explanation:
+      "Tickers ending with '.KS' represent KOSPI‑listed companies on the Korea Exchange. '.KQ' is typically used for KOSDAQ listings.",
+  },
+  {
+    question: "What is the main risk of using leverage (margin) in stock trading?",
+    options: [
+      "Lower transaction fees",
+      "Profits are capped",
+      "Losses can exceed your initial capital if the market moves sharply",
+      "You cannot diversify your portfolio",
+    ],
+    correctIndex: 2,
+    explanation:
+      "Leverage amplifies both gains and losses. In a sharp downturn, margin calls can force you to sell at a loss and even lose more than your original cash.",
+  },
+  {
+    question: "Which of the following is generally true about index ETFs (e.g., S&P 500 ETF)?",
+    options: [
+      "They try to beat the market by picking a few winning stocks",
+      "They passively track a broad market index",
+      "They are guaranteed not to lose money",
+      "They only hold bonds",
+    ],
+    correctIndex: 1,
+    explanation:
+      "Index ETFs aim to replicate the performance of a benchmark index by holding the same or similar basket of securities, rather than actively picking a few names.",
+  },
+  {
+    question: "What does a P/E (price‑to‑earnings) ratio of 30 imply?",
+    options: [
+      "The company is guaranteed to grow 30% every year",
+      "Investors are paying 30 times the company’s annual earnings per share",
+      "The dividend yield is 3.0%",
+      "The stock is automatically overvalued",
+    ],
+    correctIndex: 1,
+    explanation:
+      "A P/E of 30 means the stock price is 30 times the company’s earnings per share. It suggests high expectations but is not by itself proof of overvaluation.",
+  },
+];
+

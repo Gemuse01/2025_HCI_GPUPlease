@@ -12,7 +12,11 @@ export default defineConfig(({ mode }) => {
       plugins: [react()],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        // Bridge SENTIMENT_* envs (used by backend) into the frontend build
+        // so services/geminiService.ts can reuse the same mlapi.run config.
+        'process.env.SENTIMENT_API_URL': JSON.stringify(env.SENTIMENT_API_URL),
+        'process.env.SENTIMENT_API_KEY': JSON.stringify(env.SENTIMENT_API_KEY)
       },
       resolve: {
         alias: {
