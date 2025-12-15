@@ -129,9 +129,9 @@ const AppLayout: React.FC = () => {
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <Navbar toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
         {showMenuTour && currentStep && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center px-4 sm:px-0">
+          <div className="fixed inset-0 z-[70] flex items-center justify-center px-4 sm:px-0">
             <div className="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" onClick={closeTour} />
-            <div className="relative bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 sm:p-7 z-50">
+            <div className="relative bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 sm:p-7 z-[80]">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
                   <div className="text-xs font-bold text-primary-600 uppercase tracking-wider mb-1">Quick tour</div>

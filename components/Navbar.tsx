@@ -49,6 +49,12 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
         risk_tolerance: 'medium',
         goal: 'learning',
       });
+      try {
+        // 새로 온보딩하는 사용자에게 메뉴 투어를 다시 보여주기 위해 초기화
+        window.localStorage.removeItem('finguide_menu_tour_v1');
+      } catch {
+        // ignore
+      }
       navigate('/onboarding');
       setIsDropdownOpen(false);
     }

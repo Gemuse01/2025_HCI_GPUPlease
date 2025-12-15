@@ -679,6 +679,10 @@ const Diary: React.FC = () => {
     type Stat = { n: number; win: number; sumMove: number };
     const byEmotion = new Map<string, Stat>();
     const byDriver = new Map<string, Stat>();
+    const byCombo = new Map<
+      string,
+      { n: number; win: number; sumMove: number; emo: string; drv: string }
+    >();
 
     // 주간 패턴 역시 "라이브 시세가 실제로 들어온 일지"만 대상으로 삼는다.
     const entries = (weekDiaryEntries ?? []).filter((e: any) => e?.trade_price && e?.related_symbol);
@@ -710,6 +714,20 @@ const Diary: React.FC = () => {
       b.win += win;
       b.sumMove += eff;
       byDriver.set(drv, b);
+
+      const comboKey = `${emo}__${drv}`;
+      const c =
+        byCombo.get(comboKey) ?? {
+          n: 0,
+          win: 0,
+          sumMove: 0,
+          emo,
+          drv,
+        };
+      c.n += 1;
+      c.win += win;
+      c.sumMove += eff;
+      byCombo.set(comboKey, c);
     }
 
     const toList = (m: Map<string, Stat>, kind: "emotion" | "driver") => {
@@ -731,7 +749,29 @@ const Diary: React.FC = () => {
     const driver = toList(byDriver, "driver");
     const sampleN = emotion.reduce((acc, x) => acc + x.n, 0);
 
-    return { emotion, driver, sampleN };
+    let worst: null | {
+      emo: string;
+      drv: string;
+      n: number;
+      winRate: number;
+      avgMove: number;
+    } = null;
+
+    for (const v of byCombo.values()) {
+      if (v.n < 2) continue;
+      const avgMove = v.sumMove / v.n;
+      if (!worst || avgMove < worst.avgMove) {
+        worst = {
+          emo: v.emo,
+          drv: v.drv,
+          n: v.n,
+          winRate: v.n ? v.win / v.n : 0,
+          avgMove,
+        };
+      }
+    }
+
+    return { emotion, driver, sampleN, worstCombo: worst };
   }, [weekDiaryEntries, livePrices]);
 
   const openReport = () => {
@@ -1500,54 +1540,48 @@ const Diary: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Week patterns */}
+                    {/* Week patterns (this week) */}
                     <div className="border border-gray-200 rounded-2xl p-4">
-                      <div className="text-xs font-extrabold text-gray-700">Your Patterns (this week)</div>
-                      <div className="text-[11px] font-semibold text-gray-500">Win rate & Avg Move% (current price)</div>
+                      <div className="text-xs font-extrabold text-gray-700">Winning Pattern Watch (this week)</div>
+                      <div className="text-[11px] font-semibold text-gray-500">
+                        Emotion + driver combinations to keep an eye on this week (based on current price).
+                      </div>
 
                       {weekPatterns.sampleN === 0 ? (
                         <div className="mt-3 text-sm text-gray-500">
                           There are not enough samples this week to compute meaningful patterns.
                         </div>
+                      ) : weekPatterns.worstCombo ? (
+                        <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-extrabold text-gray-900">
+                              "{getEmotionLabel(weekPatterns.worstCombo.emo)}" + "
+                              {getReasonLabel(weekPatterns.worstCombo.drv)}"
+                            </div>
+                            <div className="text-[11px] font-semibold text-gray-500">
+                              {weekPatterns.worstCombo.n} samples · Win rate{" "}
+                              {Math.round(weekPatterns.worstCombo.winRate * 100)}%
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div
+                              className={`text-sm font-extrabold ${
+                                weekPatterns.worstCombo.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"
+                              }`}
+                            >
+                              Avg {weekPatterns.worstCombo.avgMove >= 0 ? "+" : ""}
+                              {weekPatterns.worstCombo.avgMove.toFixed(2)}%
+                            </div>
+                            <div className="text-[11px] font-semibold text-gray-500">
+                              If this combination keeps repeating this week, consider writing down stricter rules or
+                              pre‑conditions for yourself.
+                            </div>
+                          </div>
+                        </div>
                       ) : (
-                        <div className="mt-3 space-y-3">
-                          <div>
-                            <div className="text-[11px] font-extrabold text-gray-700 mb-1">Top emotions</div>
-                            <div className="space-y-1">
-                              {weekPatterns.emotion.slice(0, 3).map((s) => (
-                                <div key={s.key} className="flex items-center justify-between">
-                                  <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
-                                  <div className="text-right">
-                                    <div className="text-sm font-extrabold text-gray-900">{Math.round(s.winRate * 100)}%</div>
-                                    <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                                      Avg {s.avgMove >= 0 ? "+" : ""}
-                                      {s.avgMove.toFixed(2)}%
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div>
-                            <div className="text-[11px] font-extrabold text-gray-700 mb-1">Top drivers</div>
-                            <div className="space-y-1">
-                              {weekPatterns.driver.slice(0, 3).map((s) => (
-                                <div key={s.key} className="flex items-center justify-between">
-                                  <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
-                                  <div className="text-right">
-                                    <div className="text-sm font-extrabold text-gray-900">{Math.round(s.winRate * 100)}%</div>
-                                    <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                                      Avg {s.avgMove >= 0 ? "+" : ""}
-                                      {s.avgMove.toFixed(2)}%
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="text-[11px] font-semibold text-gray-500">sample {weekPatterns.sampleN}</div>
+                        <div className="mt-3 text-sm text-gray-500">
+                          There are not enough repeated emotion + driver combinations this week to highlight a clear
+                          pattern (need at least 2 entries with the same emotion + driver).
                         </div>
                       )}
                     </div>
