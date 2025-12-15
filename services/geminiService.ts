@@ -1,6 +1,6 @@
 // services/geminiService.ts
 import { GoogleGenerativeAI, type Content } from "@google/generative-ai";
-import type { UserProfile, DiaryEntry } from "../types";
+import type { UserProfile, DiaryEntry, Portfolio } from "../types";
 import { PERSONA_DETAILS } from "../constants";
 import { apiUrl } from "./apiClient";
 
@@ -29,6 +29,11 @@ const mlBaseUrl = rawMlBaseUrl.replace(/\/+$/, "");
 const mlApiKey =
   (import.meta.env.VITE_SENTIMENT_API_KEY as string | undefined) ||
   (process.env.SENTIMENT_API_KEY as string | undefined);
+
+// Feature flag: enable/disable AI Mentor in‑chat micro‑surveys
+const mentorSurveyEnabled =
+  ((import.meta.env.VITE_MENTOR_SURVEY_ENABLED as string | undefined) ?? "true")
+    .toLowerCase() === "true";
 
 // (구) 외부 감성분석 직접 호출은 제거하고, 백엔드 프록시 (/api/news-sentiment) 를 사용
 
