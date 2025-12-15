@@ -195,17 +195,44 @@ How can I support your journey today?`,
     }
   };
 
-  // 컴포넌트 마운트 시 세션 목록 로드
+  // 컴포넌트 마운트 시 세션 목록 로드 (한 번만 실행)
   useEffect(() => {
-    const loadedSessions = loadSessions();
-    setSessions(loadedSessions);
+    if (typeof window === 'undefined') return;
     
-    // 가장 최근 세션이 있으면 자동 선택
-    if (loadedSessions.length > 0) {
-      setCurrentSessionId(loadedSessions[0].id);
-      loadMessages(loadedSessions[0].id);
+    try {
+      const raw = window.localStorage.getItem(sessionsStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<any>;
+        const loadedSessions = parsed.map((s) => ({
+          ...s,
+          createdAt: new Date(s.createdAt),
+          updatedAt: new Date(s.updatedAt),
+        })).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+        
+        setSessions(loadedSessions);
+        
+        // 가장 최근 세션이 있으면 자동 선택
+        if (loadedSessions.length > 0) {
+          setCurrentSessionId(loadedSessions[0].id);
+          // 메시지 로드는 별도로 처리
+          const sessionRaw = window.localStorage.getItem(getSessionStorageKey(loadedSessions[0].id));
+          if (sessionRaw) {
+            const parsed = JSON.parse(sessionRaw) as Array<any>;
+            const loadedMessages = parsed.map((m) => ({
+              ...m,
+              timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+            }));
+            setMessages(loadedMessages);
+          } else {
+            setMessages([createInitialMessage()]);
+          }
+        }
+      }
+    } catch {
+      // ignore
     }
-  }, [loadSessions, loadMessages]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 마운트 시에만 실행
 
   const handleNewChat = React.useCallback(() => {
     // 새 세션 생성
@@ -294,13 +321,17 @@ How can I support your journey today?`,
               JSON.stringify(loadedMessages)
             );
             
-            // 세션 목록 업데이트
-            const updatedSessions = [newSession, ...sessions];
-            setSessions(updatedSessions);
-            saveSessions(updatedSessions);
+            // 세션 목록 업데이트 (함수형 업데이트 사용)
+            setSessions(prev => {
+              const updatedSessions = [newSession, ...prev];
+              saveSessions(updatedSessions);
+              return updatedSessions;
+            });
             
             // 세션 선택
-            selectSession(newSessionId);
+            setCurrentSessionId(newSessionId);
+            setMessages(loadedMessages);
+            setSidebarOpen(false);
           }
         } catch {
           // ignore
@@ -312,7 +343,7 @@ How can I support your journey today?`,
     return () => {
       window.removeEventListener('chatExpanded', handleChatExpanded as EventListener);
     };
-  }, [sessions, getSessionStorageKey, saveSessions, selectSession]);
+  }, [getSessionStorageKey, saveSessions, user?.id, user?.persona]);
 
   // 채팅 히스토리를 로컬스토리지에 저장
   useEffect(() => {
@@ -334,18 +365,21 @@ How can I support your journey today?`,
       const firstUserMessage = messages.find(m => m.role === 'user');
       if (firstUserMessage) {
         const sessionTitle = firstUserMessage.text.substring(0, 50);
-        const updatedSessions = sessions.map(s => 
-          s.id === currentSessionId 
-            ? { ...s, title: sessionTitle, updatedAt: new Date() }
-            : s
-        ).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
-        setSessions(updatedSessions);
-        saveSessions(updatedSessions);
+        // 함수형 업데이트를 사용하여 sessions 의존성 제거
+        setSessions(prev => {
+          const updatedSessions = prev.map(s => 
+            s.id === currentSessionId 
+              ? { ...s, title: sessionTitle, updatedAt: new Date() }
+              : s
+          ).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+          saveSessions(updatedSessions);
+          return updatedSessions;
+        });
       }
     } catch {
       // 저장 실패는 조용히 무시
     }
-  }, [messages, currentSessionId, getSessionStorageKey, sessions, saveSessions]);
+  }, [messages, currentSessionId, getSessionStorageKey, saveSessions]);
 
 
   const handleSend = async (textInput: string) => {
