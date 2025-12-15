@@ -88,7 +88,7 @@ const AiAgent: React.FC = () => {
   }, [sessionsStorageKey]);
 
   // 초기 메시지 생성
-  const createInitialMessage = (): Message => ({
+  const createInitialMessage = React.useCallback((): Message => ({
     id: '1',
     role: 'model',
     text: `Hello ${user.name}! I'm your personalized FinGuide mentor. 
@@ -97,7 +97,7 @@ I know you're here for **${user.goal}** and prefer a **${user.risk_tolerance}** 
 
 How can I support your journey today?`,
     timestamp: new Date(),
-  });
+  }), [user.name, user.goal, user.risk_tolerance, marketCondition]);
 
   const [messages, setMessages] = useState<Message[]>([createInitialMessage()]);
   const [isLoading, setIsLoading] = useState(false);
