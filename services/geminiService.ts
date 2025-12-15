@@ -482,6 +482,100 @@ Constraints:
   }
 };
 
+// Weekly Report generator for Diary.tsx "Weekly Report" modal
+// - This is called with a compact payload that already contains:
+//   - weekRange (string label)
+//   - metrics (coverage, weekly goal, patterns)
+//   - entries (trimmed diary entries for the selected week)
+//   - persona (user persona key)
+type WeeklyReportPayload = {
+  weekRange: string;
+  metrics: {
+    diaryCoverage: { covered: number; total: number; pct: number };
+    weeklyGoal: { goal: number; count: number; pct: number };
+    patterns: {
+      sampleN: number;
+      topEmotion: any[];
+      topDriver: any[];
+    };
+  };
+  entries: any[];
+  persona?: UserProfile["persona"];
+};
+
+export const generateWeeklyReport = async (
+  payload: WeeklyReportPayload
+): Promise<string> => {
+  const personaKey = payload.persona;
+  const persona = personaKey ? PERSONA_DETAILS[personaKey] : undefined;
+
+  const personaLine = persona
+    ? `Persona: ${persona.label} (${persona.description})`
+    : "Persona: (not specified)";
+
+  const prompt = `
+You are an AI trading coach creating a structured WEEKLY REPORT for a beginner retail investor in a practice trading account.
+
+Week range:
+- ${payload.weekRange}
+
+User profile:
+- ${personaLine}
+
+Weekly metrics (already precomputed):
+- Diary coverage (trades with a journal): ${JSON.stringify(payload.metrics.diaryCoverage)}
+- Weekly goal (target vs. actual entries): ${JSON.stringify(payload.metrics.weeklyGoal)}
+- Pattern snapshots (top emotions/drivers, sample counts & performance snippets): ${JSON.stringify(
+    payload.metrics.patterns
+  )}
+
+Weekly diary entries (compact, chronological within the selected week):
+${JSON.stringify(payload.entries)}
+
+Write a WEEKLY REPORT in clear English, using this exact structure and headings:
+
+1) One-line weekly theme
+   - 1–2 short sentences capturing the emotional + behavioral theme of the week.
+
+2) What you actually logged this week
+   - 2–4 bullet points about diary coverage, how consistent the logging was, and any gaps.
+
+3) Strengths to keep
+   - 3 short bullets focusing on process strengths (pre‑trade planning, sticking to rules, reviewing decisions, etc.).
+
+4) Risks / patterns to watch
+   - 3 short bullets about psychological or risk‑management issues that showed up (e.g., chasing, revenge trades, moving stops).
+
+5) Winning pattern watch
+   - 2–3 bullets that highlight any emotion + driver combinations that look especially strong or weak so far.
+
+6) Next week checklist (5 items)
+   - 5 bullet items in checklist style (but do NOT use "[ ]" or checkbox syntax; use normal "-" bullets).
+   - Each item should be a very small, concrete behavior the user can track next week.
+
+7) Reflection questions (3)
+   - Exactly 3 numbered self‑reflection questions the user can answer at the end of next week.
+
+Constraints:
+- Total length under about 320 words.
+- Keep the tone encouraging but honest. Remind them that this is a safe practice environment.
+- Do NOT mention that you received JSON as input.
+- Do NOT invent specific prices or P&L numbers beyond what is implied by the metrics.
+`.trim();
+
+  try {
+    const text = await callMlChat(prompt, 700);
+    const out = (text || "").trim();
+    if (!out) {
+      return "I couldn’t generate the weekly report right now. Please try again in a moment — your diary entries and metrics are still safely stored.";
+    }
+    return out;
+  } catch (err) {
+    console.error("[generateWeeklyReport] error:", err);
+    return "The AI Coach couldn’t generate a weekly report right now. Please try again later — meanwhile, reviewing your own diary entries for this week is already a powerful habit.";
+  }
+};
+
 /* -----------------------------
  * Dashboard: 5‑minute learning & quizzes
  * ----------------------------- */

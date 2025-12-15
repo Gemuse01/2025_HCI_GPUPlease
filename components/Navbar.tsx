@@ -37,14 +37,17 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar }) => {
   };
 
   const handleResetPersona = () => {
-    if (window.confirm('Would you like to reset your persona? Your portfolio and transaction history will be kept, and only your user information will be reset.')) {
+    if (
+      window.confirm(
+        'Would you like to reset your persona? Your portfolio and transaction history will be kept, and only your user information will be reset.'
+      )
+    ) {
       // 사용자 정보만 초기화하고 포트폴리오, 거래 내역, 일기는 유지
       updateUser({
         name: '',
         persona: UserPersona.UNDECIDED,
         risk_tolerance: 'medium',
         goal: 'learning',
-        is_onboarded: false
       });
       navigate('/onboarding');
       setIsDropdownOpen(false);
