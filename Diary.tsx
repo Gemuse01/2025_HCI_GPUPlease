@@ -29,7 +29,7 @@ import {
 
 const QUOTE_CACHE_KEY = "finguide_live_quotes_v1";
 const TIMEZONE = "Asia/Seoul";
-const WEEKLY_GOAL = 5; // ✅ 주간 목표(원하면 바꾸기)
+const WEEKLY_GOAL = 5; // ✅ Weekly target (you can adjust if needed)
 
 function isKoreanStock(symbol: string) {
   return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
@@ -96,7 +96,7 @@ function getReasonIcon(reason: string) {
   }
 }
 
-/** 작은 Tooltip (hover/focus) */
+/** Small tooltip component (hover/focus) */
 const Tooltip: React.FC<{
   text: string;
   children: React.ReactNode;
@@ -129,7 +129,7 @@ const Tooltip: React.FC<{
   );
 };
 
-/** ✅ Chip 그룹 컨테이너 (Trade / Plan / Performance) */
+/** ✅ Chip group container (Trade / Plan / Performance) */
 const ChipGroup: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = "" }) => {
   return (
     <div className={`flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-2 ${className}`}>
@@ -206,8 +206,8 @@ function stripCodeFences(text: string): string {
   return t;
 }
 
-// 런타임에서 geminiService.ts에 generateWeeklyReport가 생기면 자동으로 사용.
-// (지금 Diary.tsx만 먼저 바꾸는 단계에서도 빌드 깨지지 않도록 동적 import)
+// At runtime, if generateWeeklyReport exists in geminiService.ts, use it automatically.
+// (Dynamic import so Diary.tsx can compile even before the generator is implemented.)
 async function tryGenerateWeeklyReport(payload: any): Promise<any> {
   const mod: any = await import("./services/geminiService");
   if (typeof mod?.generateWeeklyReport === "function") {
@@ -286,13 +286,13 @@ const Diary: React.FC = () => {
     return (diary ?? []).slice().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [diary]);
 
-  // ✅ 티커별 "가장 최근" 일기 id (Recheck 태그는 여기만 노출)
+  // ✅ Per‑ticker latest diary entry id (Recheck tags only shown on latest entry)
   const latestEntryIdByTicker = useMemo(() => {
     const map: Record<string, string> = {};
     for (const d of sortedDiary) {
       const symbol = String(d?.related_symbol || "").trim().toUpperCase();
       if (!symbol) continue;
-      if (!map[symbol]) map[symbol] = d.id; // sortedDiary는 최신순이므로 첫 등장 = 최신
+      if (!map[symbol]) map[symbol] = d.id; // sortedDiary is newest-first, so first occurrence is latest
     }
     return map;
   }, [sortedDiary]);
@@ -514,10 +514,10 @@ const Diary: React.FC = () => {
    * ========================================================= */
   const [reportOpen, setReportOpen] = useState(false);
 
-  // “리포트 기준 주” (기본: 이번 주 월요일)
+  // “Report base week” (default: this week's Monday, in KST)
   const [reportWeekStartKey, setReportWeekStartKey] = useState<string>(() => getWeekStartKeyFromDate(Date.now()));
 
-  // AI 결과 상태
+  // AI result state
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string>("");
   const [reportOutput, setReportOutput] = useState<string>("");
@@ -528,7 +528,7 @@ const Diary: React.FC = () => {
     return `${reportWeekStartKey} ~ ${endInclusive}`;
   }, [reportWeekStartKey]);
 
-  // 이번 주(선택 주)의 일기/거래 필터링
+  // Filter diary entries / transactions for the selected week
   const weekDiaryEntries = useMemo(() => {
     return (diary ?? []).filter((d: any) => {
       const k = kstDateKey(d.date);
@@ -543,14 +543,14 @@ const Diary: React.FC = () => {
     });
   }, [transactions, reportWeekStartKey, reportWeekEndExclusive]);
 
-  // 선택 주 Weekly Goal
+  // Weekly goal stats for the selected week
   const weekGoal = useMemo(() => {
     const count = weekDiaryEntries.length;
     const pct = Math.max(0, Math.min(100, Math.round((count / WEEKLY_GOAL) * 100)));
     return { count, pct };
   }, [weekDiaryEntries]);
 
-  // 선택 주 Coverage (주간)
+  // Coverage for the selected week
   const weekCoverage = useMemo(() => {
     const txKeys: string[] = (weekTransactions ?? [])
       .map((t: any) =>
@@ -587,7 +587,7 @@ const Diary: React.FC = () => {
     return { covered, total, pct };
   }, [weekTransactions, weekDiaryEntries]);
 
-  // 선택 주 Your Patterns(주간)
+  // Weekly "Your Patterns" for the selected week
   const weekPatterns = useMemo(() => {
     type Stat = { n: number; win: number; sumMove: number };
     const byEmotion = new Map<string, Stat>();
@@ -664,7 +664,7 @@ const Diary: React.FC = () => {
     setReportLoading(true);
 
     try {
-      // LLM에 넘길 “주간 컨텍스트” (너무 길지 않게)
+      // Weekly context to send to the LLM (kept compact)
       const compactEntries = (weekDiaryEntries ?? [])
         .slice()
         .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
@@ -735,7 +735,7 @@ const Diary: React.FC = () => {
         </Tooltip>
       </div>
 
-      {/* ✅ 1행: Diary Coverage (L) + Weekly Goal (R) */}
+      {/* ✅ Row 1: Diary Coverage (L) + Weekly Goal (R) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Diary Coverage */}
         <div className="bg-white border border-gray-200 rounded-2xl p-4">
@@ -787,7 +787,7 @@ const Diary: React.FC = () => {
               </div>
 
               <div className="mt-3 text-[11px] font-semibold text-gray-500">
-                * 매칭 기준: (KST 날짜 + BUY/SELL + ticker + qty + price)
+                * Matching rule: (KST date + BUY/SELL + ticker + qty + price)
               </div>
             </div>
           </div>
@@ -828,11 +828,15 @@ const Diary: React.FC = () => {
       <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
         <div>
           <div className="text-sm font-extrabold text-gray-900">Your patterns</div>
-          <div className="text-xs font-semibold text-gray-500">Win rate & Avg Move% (current price 기준)</div>
+          <div className="text-xs font-semibold text-gray-500">
+            Win rate & Avg Move% (based on current price)
+          </div>
         </div>
 
         {performanceStats.sampleN === 0 ? (
-          <div className="text-sm text-gray-500">아직 통계를 만들 데이터가 부족해요. (trade_price + ticker가 있는 기록이 필요)</div>
+          <div className="text-sm text-gray-500">
+            There is not enough data yet to build statistics (entries need both trade_price and ticker).
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="border border-gray-200 rounded-2xl p-4">
@@ -900,11 +904,17 @@ const Diary: React.FC = () => {
                       Avg {performanceStats.worstCombo.avgMove >= 0 ? "+" : ""}
                       {performanceStats.worstCombo.avgMove.toFixed(2)}%
                     </div>
-                    <div className="text-[11px] font-semibold text-gray-500">(이 조합이 반복되면 “규칙/사전조건”을 더 강하게 적어두는 게 좋아요)</div>
+                    <div className="text-[11px] font-semibold text-gray-500">
+                      If this combination keeps repeating, it’s a good idea to write down stricter rules or
+                      pre-conditions for yourself.
+                    </div>
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-gray-500">아직 “조합 패턴”을 만들 데이터가 부족해요. (같은 감정+driver가 2개 이상)</div>
+                <div className="text-sm text-gray-500">
+                  There is not enough data yet to build combination patterns (need at least 2 entries with the
+                  same emotion + driver).
+                </div>
               )}
             </div>
           </div>
@@ -970,7 +980,7 @@ const Diary: React.FC = () => {
             const recheckText = formatRecheckLabel(entry?.recheck_pct);
             const recheckNow = isRecheckNow(movePct, entry?.recheck_pct);
 
-            // ✅ 티커별 "최신 일기"에만 Recheck 관련 태그 노출
+            // ✅ Show Recheck-related tags only on the latest entry for each ticker
             const isLatestForTicker = !!symbol && latestEntryIdByTicker[symbol] === entry.id;
             const showRecheckTags = isLatestForTicker && (recheckNow || recheckText);
 
@@ -1036,7 +1046,7 @@ const Diary: React.FC = () => {
                       )}
                     </ChipGroup>
 
-                    {/* PLAN (✅ 최신 티커 엔트리만 노출) */}
+                    {/* PLAN (✅ shown only for the latest entry of each ticker) */}
                     {showRecheckTags && (
                       <ChipGroup>
                         {recheckNow && (
@@ -1071,7 +1081,7 @@ const Diary: React.FC = () => {
                         </Tooltip>
 
                         {Number.isFinite(movePct as number) && (
-                          <Tooltip text="Move% from entry (current price 기준)">
+                          <Tooltip text="Move% from entry (based on current price)">
                             <span
                               tabIndex={0}
                               className={`px-2.5 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1.5 ${
@@ -1353,7 +1363,7 @@ const Diary: React.FC = () => {
                       </div>
 
                       <div className="mt-2 text-[11px] font-semibold text-gray-500">
-                        * 매칭 기준: (KST 날짜 + BUY/SELL + ticker + qty + price)
+                        * Matching rule: (KST date + BUY/SELL + ticker + qty + price)
                       </div>
                     </div>
 
@@ -1383,7 +1393,9 @@ const Diary: React.FC = () => {
                       <div className="text-[11px] font-semibold text-gray-500">Win rate & Avg Move% (current price)</div>
 
                       {weekPatterns.sampleN === 0 ? (
-                        <div className="mt-3 text-sm text-gray-500">이번 주엔 패턴을 만들 샘플이 부족해요.</div>
+                        <div className="mt-3 text-sm text-gray-500">
+                          There are not enough samples this week to compute meaningful patterns.
+                        </div>
                       ) : (
                         <div className="mt-3 space-y-3">
                           <div>
@@ -1453,7 +1465,9 @@ const Diary: React.FC = () => {
 
                     <div className="mt-4 flex-1 min-h-[220px]">
                       {weekDiaryEntries.length === 0 ? (
-                        <div className="text-sm text-gray-500">선택한 주에 작성된 일기가 없어요.</div>
+                        <div className="text-sm text-gray-500">
+                          There are no diary entries for the selected week.
+                        </div>
                       ) : reportError ? (
                         <div className="text-sm font-semibold text-red-600 whitespace-pre-wrap break-words">{reportError}</div>
                       ) : reportOutput ? (
@@ -1462,7 +1476,8 @@ const Diary: React.FC = () => {
                         </pre>
                       ) : (
                         <div className="text-sm text-gray-500">
-                          오른쪽 상단 <span className="font-bold">Generate</span>를 누르면 주간 요약/조언을 생성해요.
+                          Click <span className="font-bold">Generate</span> in the top-right to create a weekly
+                          summary and AI coach report.
                         </div>
                       )}
                     </div>
