@@ -1,5 +1,5 @@
 // api/dashboard-learning.ts
-// Generate 5-minute learning cards using mlapi.run (GPT-5 nano) JSON output.
+// Generate 5-minute learning cards using mlapi.run (GPT-5) JSON output.
 
 const ML_BASE_URL =
   (process.env.SENTIMENT_API_URL as string | undefined) ||
@@ -20,7 +20,7 @@ async function callOpenAiJson(prompt: string, maxTokens: number): Promise<any> {
       Authorization: `Bearer ${ML_API_KEY}`,
     },
     body: JSON.stringify({
-      model: "openai/gpt-5-nano",
+      model: "openai/gpt-5",
       messages: [
         {
           role: "user",

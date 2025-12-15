@@ -164,6 +164,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setState(prev => ({ ...prev, user: { ...prev.user, ...userData } }));
   }, []);
 
+  // Apply survey answers: call backend /api/update-persona and update local user persona if changed
+  const applySurveyAnswers = useCallback(async (answers: string[]) => {
+    try {
+      const res = await fetch('http://localhost:5002/api/update-persona', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          answers,
+          current_persona: state.user.persona,
+        }),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`Persona API error ${res.status}: ${txt}`);
+      }
+
+      const data = await res.json();
+
+      // 🔑 반드시 prev 기반으로 업데이트
+      if (data && data.persona) {
+        setState(prev => {
+          if (prev.user.persona === data.persona) {
+            return prev;
+          }
+          return {
+            ...prev,
+            user: {
+              ...prev.user,
+              persona: data.persona,
+            },
+          };
+        });
+      }
+
+      return {
+        persona: data.persona,
+        label: data.label,
+        changed: !!data.changed,
+      };
+    } catch (e: any) {
+      throw new Error(String(e?.message || e));
+    }
+  }, [state.user.persona]);
+
   const setMarketCondition = useCallback((condition: MarketCondition) => {
     setState(prev => ({ ...prev, marketCondition: condition }));
   }, []);
@@ -281,7 +326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   return (
-    <AppContext.Provider value={{ ...state, updateUser, setMarketCondition, executeTrade, addDiaryEntry, updateDiaryEntry, resetApp }}>
+    <AppContext.Provider value={{ ...state, updateUser, setMarketCondition, executeTrade, addDiaryEntry, updateDiaryEntry, resetApp, applySurveyAnswers }}>
       {children}
     </AppContext.Provider>
   );

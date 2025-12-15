@@ -1,6 +1,6 @@
 // services/geminiService.ts
 import { GoogleGenerativeAI, type Content } from "@google/generative-ai";
-import type { UserProfile, Portfolio, DiaryEntry } from "../types";
+import type { UserProfile, DiaryEntry } from "../types";
 import { PERSONA_DETAILS } from "../constants";
 import { apiUrl } from "./apiClient";
 
@@ -16,10 +16,6 @@ const apiKey = import.meta.env.VITE_API_KEY as string;
 const hasApiKey = apiKey && apiKey.trim().length > 0;
 const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
 
-// Feature flag: enable/disable AI Mentor in‑chat micro‑surveys
-const mentorSurveyEnabled =
-  ((import.meta.env.VITE_MENTOR_SURVEY_ENABLED as string | undefined) ?? "true")
-    .toLowerCase() === "true";
 
 // GPT (mlapi.run) base URL & key for dashboard content generation
 // URL: 프론트에서는 별도 VITE_* 없이, 백엔드와 동일한 기본값을 그대로 사용한다.
@@ -248,6 +244,7 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
  * Public APIs
  * ----------------------------- */
 
+<<<<<<< HEAD
 export const generateFinancialAdvice = async (
   history: Content[],
   user: UserProfile,
@@ -326,6 +323,8 @@ Now respond as FinGuide to the user's last message.
 };
 
 
+=======
+>>>>>>> dev3
 export const generateDiaryFeedback = async (
   entry: DiaryEntry,
   user: UserProfile,

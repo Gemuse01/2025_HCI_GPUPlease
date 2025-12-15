@@ -6,11 +6,53 @@ import os
 import json
 import re
 
+from dotenv import load_dotenv
 from qwen_client import call_qwen_finsec_model, build_security_prompt
 from openai import OpenAI
 
+from services.persona_engine import persona_bp
+
+# Load environment variables from .env.local (for Vite compatibility) and .env
+load_dotenv(".env.local")
+load_dotenv(".env")  # Also try .env if it exists
+
 app = Flask(__name__)
 CORS(app)  # allow all origins for /api/*
+
+# ---- OpenAI client setup (must be before blueprint registration) ----
+# Try both VITE_ prefixed (from .env.local) and non-prefixed versions
+SENTIMENT_API_URL = (
+    os.getenv("VITE_MLAPI_BASE_URL") or
+    os.getenv("MLAPI_BASE_URL") or
+    os.getenv("SENTIMENT_API_URL") or
+    "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1"
+)
+SENTIMENT_API_KEY = (
+    os.getenv("VITE_SENTIMENT_API_KEY") or
+    os.getenv("SENTIMENT_API_KEY") or
+    ""
+)
+
+# Initialize OpenAI client with error logging
+if SENTIMENT_API_KEY and SENTIMENT_API_URL:
+    try:
+        openai_client = OpenAI(base_url=SENTIMENT_API_URL, api_key=SENTIMENT_API_KEY)
+        print(f"[INFO] OpenAI client initialized successfully")
+        print(f"[DEBUG] API URL: {SENTIMENT_API_URL[:60]}...")
+        print(f"[DEBUG] API Key: {'***' + SENTIMENT_API_KEY[-4:] if len(SENTIMENT_API_KEY) > 4 else '***'}")
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize OpenAI client: {e}")
+        openai_client = None
+else:
+    openai_client = None
+    print("[WARNING] OpenAI client not initialized: SENTIMENT_API_KEY or SENTIMENT_API_URL not set")
+    print(f"[DEBUG] SENTIMENT_API_URL: {SENTIMENT_API_URL}")
+    print(f"[DEBUG] SENTIMENT_API_KEY: {'Set' if SENTIMENT_API_KEY else 'Not set'}")
+
+app.config["OPENAI_CLIENT"] = openai_client
+
+# Register persona blueprint (after openai_client is set in app.config)
+app.register_blueprint(persona_bp)
 
 
 def yahoo_search_symbols(query: str):
@@ -488,21 +530,12 @@ def get_news():
 
 
 # -----------------------------
-# GPT-5 nano sentiment proxy  (/api/news-sentiment)
+# GPT-5 sentiment proxy  (/api/news-sentiment)
 # -----------------------------
 
-# 환경변수로 덮어쓸 수 있게 기본값만 설정
-SENTIMENT_API_URL = os.getenv(
-    "SENTIMENT_API_URL",
-    "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1",
-)
-SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
+# (OpenAI client is already set up at top of file and injected into app.config)
 
-openai_client = (
-    OpenAI(base_url=SENTIMENT_API_URL, api_key=SENTIMENT_API_KEY)
-    if SENTIMENT_API_KEY
-    else None
-)
+
 
 
 openai_client = (
@@ -539,7 +572,7 @@ def _normalize_link_value(raw):
 
 def call_openai_json(prompt: str, max_tokens: int = 800):
     """
-    Helper to call the GPT-5 nano (mlapi) chat completion endpoint and parse JSON from content.
+    Helper to call the GPT-5 (mlapi) chat completion endpoint and parse JSON from content.
     Assumes openai_client is configured as an OpenAI(base_url=..., api_key=...).
     """
     if openai_client is None:
@@ -550,7 +583,7 @@ def call_openai_json(prompt: str, max_tokens: int = 800):
     #   돌려주는 문제가 있어서 여기서는 토큰 제한을 명시적으로 주지 않는다.
     # - 모델 기본값에 맡기고, 너무 길게 나오면 프롬프트 쪽에서 길이를 제한하는 방식으로 제어한다.
     resp = openai_client.chat.completions.create(
-        model="openai/gpt-5-nano",
+        model="openai/gpt-5",
         messages=[
             {
                 "role": "user",
@@ -576,7 +609,7 @@ def call_openai_json(prompt: str, max_tokens: int = 800):
 @app.route("/api/news-sentiment", methods=["POST"])
 def news_sentiment():
     """
-    프론트에서 뉴스 제목/요약을 보내면 GPT-5 nano로 감성분석 수행.
+    프론트에서 뉴스 제목/요약을 보내면 GPT-5로 감성분석 수행.
     body: { "title": str, "summary": str, "symbols": [str] }
     응답: { "sentiment": "positive"|"negative"|"neutral" }
     """
@@ -596,7 +629,7 @@ def news_sentiment():
         user_text = f"Headline: {title[:200]}\n\nSummary: {summary[:600]}\nSymbols: {', '.join(symbols) if isinstance(symbols, list) else symbols}"
 
         resp = openai_client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-5",
             messages=[
                 {
                     "role": "system",
@@ -626,7 +659,7 @@ def news_sentiment():
 @app.route("/api/dashboard-learning", methods=["GET"])
 def dashboard_learning():
     """
-    Generate 5-minute learning cards for the dashboard using GPT-5 nano.
+    Generate 5-minute learning cards for the dashboard using GPT-5.
     Response: { "cards": [ { "title", "duration", "category", "content" }, ... ] }
     """
     if openai_client is None:
@@ -699,7 +732,7 @@ Requirements:
 @app.route("/api/dashboard-quizzes", methods=["GET"])
 def dashboard_quizzes():
     """
-    Generate multiple-choice quiz questions for the dashboard using GPT-5 nano.
+    Generate multiple-choice quiz questions for the dashboard using GPT-5.
     Response: { "quizzes": [ { "question", "options", "correctIndex", "explanation" }, ... ] }
     """
     # 기본 샘플 퀴즈 (LLM 사용 불가 시 fallback)

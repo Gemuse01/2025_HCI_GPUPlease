@@ -86,3 +86,13 @@ export interface AppContextType extends AppState {
   updateDiaryEntry: (id: string, updates: Partial<DiaryEntry>) => void;
   resetApp: () => void;
 }
+
+export interface DocumentRow {
+  doc_id: number;
+  title: string;
+  body: string;
+  press: string;
+  published_at: Date | string;
+  rank?: number;
+  applySurveyAnswers?: (answers: string[]) => Promise<{ persona: string; label: string; changed: boolean }>;
+}

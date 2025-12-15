@@ -1,5 +1,5 @@
 // api/dashboard-quizzes.ts
-// Generate multiple-choice quiz questions using mlapi.run (GPT-5 nano).
+// Generate multiple-choice quiz questions using mlapi.run (GPT-5).
 
 const ML_BASE_URL =
   (process.env.SENTIMENT_URL as string | undefined) ||
@@ -21,7 +21,7 @@ async function callOpenAiJson(prompt: string, maxTokens: number): Promise<any> {
       Authorization: `Bearer ${ML_API_KEY}`,
     },
     body: JSON.stringify({
-      model: "openai/gpt-5-nano",
+      model: "openai/gpt-5",
       messages: [
         {
           role: "user",
