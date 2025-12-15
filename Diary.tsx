@@ -441,6 +441,9 @@ const Diary: React.FC = () => {
   type GroupStat = { key: string; label: string; n: number; win: number; avgMove: number };
 
   const performanceStats = useMemo(() => {
+    // 통계는 "실제 라이브 시세가 있는 일지"만 대상으로 계산한다.
+    // 라이브 시세가 없어서 엔트리 가격 == 현재가인 경우(사실상 0% 이동)는
+    // 패턴 신호로서 의미가 거의 없으므로 샘플에서 제외한다.
     const entries = (diary ?? []).filter((e: any) => e?.trade_price && e?.related_symbol);
 
     const byEmotion = new Map<string, { n: number; win: number; sumMove: number }>();
@@ -449,9 +452,14 @@ const Diary: React.FC = () => {
 
     for (const entry of entries) {
       const symbol = String(entry.related_symbol || "").toUpperCase();
-      const current = symbol ? getCurrentPrice(symbol, entry?.trade_price) : undefined;
+      const live = symbol ? livePrices[symbol] : undefined;
 
-      const move = computeMovePct(current, entry?.trade_price);
+      // 라이브 시세가 없으면 이 샘플은 건너뛴다.
+      if (!live || !Number.isFinite(live.price) || !Number.isFinite(entry?.trade_price)) {
+        continue;
+      }
+
+      const move = computeMovePct(live.price, entry?.trade_price);
       const eff = effectiveMovePct(entry, move);
       if (typeof eff !== "number" || !Number.isFinite(eff)) continue;
 
@@ -508,6 +516,85 @@ const Diary: React.FC = () => {
       sampleN: emotionList.reduce((acc, x) => acc + x.n, 0),
     };
   }, [diary, livePrices]);
+
+  // -----------------------------
+  // ✅ Emotion / Driver 분포 비율 (all time)
+  // -----------------------------
+  type DistItem = { key: string; label: string; n: number; pct: number };
+
+  const emotionDriverDistribution = useMemo(() => {
+    const entries = Array.isArray(diary) ? diary : [];
+
+    const emoMap = new Map<string, number>();
+    const drvMap = new Map<string, number>();
+
+    let emoTotal = 0;
+    let drvTotal = 0;
+
+    for (const e of entries) {
+      const emo = e?.emotion;
+      if (emo) {
+        emoTotal += 1;
+        emoMap.set(emo, (emoMap.get(emo) ?? 0) + 1);
+      }
+
+      const drv = e?.reason;
+      if (drv) {
+        drvTotal += 1;
+        drvMap.set(drv, (drvMap.get(drv) ?? 0) + 1);
+      }
+    }
+
+    const buildDistribution = (
+      m: Map<string, number>,
+      total: number,
+      kind: "emotion" | "driver"
+    ): DistItem[] => {
+      if (!total) return [];
+
+      type Tmp = { key: string; label: string; n: number; rawPct: number; base: number; frac: number };
+      const tmpList: Tmp[] = [];
+
+      for (const [k, n] of m.entries()) {
+        const label = kind === "emotion" ? getEmotionLabel(k) : getReasonLabel(k);
+        const rawPct = (n / total) * 100;
+        const base = Math.floor(rawPct);
+        const frac = rawPct - base;
+        tmpList.push({ key: k, label, n, rawPct, base, frac });
+      }
+
+      // 기본 값(내림) 합계
+      let sumBase = tmpList.reduce((acc, item) => acc + item.base, 0);
+      let remaining = 100 - sumBase;
+
+      // 남은 퍼센트를 소수점이 큰 항목부터 1%씩 배분해 합계가 정확히 100이 되도록 조정
+      if (remaining > 0) {
+        const byFracDesc = [...tmpList].sort((a, b) => b.frac - a.frac);
+        let idx = 0;
+        while (remaining > 0 && byFracDesc.length > 0) {
+          byFracDesc[idx].base += 1;
+          remaining -= 1;
+          idx = (idx + 1) % byFracDesc.length;
+        }
+      }
+
+      const out: DistItem[] = tmpList.map((item) => ({
+        key: item.key,
+        label: item.label,
+        n: item.n,
+        pct: item.base,
+      }));
+
+      return out.sort((a, b) => b.n - a.n);
+    };
+
+    return {
+      emotion: buildDistribution(emoMap, emoTotal, "emotion"),
+      driver: buildDistribution(drvMap, drvTotal, "driver"),
+      totalEmotion: emoTotal,
+      totalDriver: drvTotal,
+    };
+  }, [diary]);
 
   /* =========================================================
    * ✅ Weekly Report (Button + Modal + Week-filter Aggregation)
@@ -593,13 +680,18 @@ const Diary: React.FC = () => {
     const byEmotion = new Map<string, Stat>();
     const byDriver = new Map<string, Stat>();
 
+    // 주간 패턴 역시 "라이브 시세가 실제로 들어온 일지"만 대상으로 삼는다.
     const entries = (weekDiaryEntries ?? []).filter((e: any) => e?.trade_price && e?.related_symbol);
 
     for (const entry of entries) {
       const symbol = String(entry.related_symbol || "").toUpperCase();
-      const current = symbol ? getCurrentPrice(symbol, entry?.trade_price) : undefined;
+      const live = symbol ? livePrices[symbol] : undefined;
 
-      const move = computeMovePct(current, entry?.trade_price);
+      if (!live || !Number.isFinite(live.price) || !Number.isFinite(entry?.trade_price)) {
+        continue;
+      }
+
+      const move = computeMovePct(live.price, entry?.trade_price);
       const eff = effectiveMovePct(entry, move);
       if (typeof eff !== "number" || !Number.isFinite(eff)) continue;
 
@@ -824,7 +916,78 @@ const Diary: React.FC = () => {
         </div>
       </div>
 
-      {/* ✅ Your patterns */}
+      {/* ✅ Emotion / Driver 분포 비율 */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
+        <div>
+          <div className="text-sm font-extrabold text-gray-900">Emotion & driver mix</div>
+          <div className="text-xs font-semibold text-gray-500">
+            How often each emotion/driver appears in your diary entries (distribution).
+          </div>
+        </div>
+
+        {emotionDriverDistribution.totalEmotion === 0 && emotionDriverDistribution.totalDriver === 0 ? (
+          <div className="text-sm text-gray-500">
+            There are no diary entries with selected emotion/driver yet. Write a few entries after trades to see your
+            patterns.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="border border-gray-200 rounded-2xl p-4">
+              <div className="text-xs font-extrabold text-gray-700 mb-3">By emotion</div>
+              {emotionDriverDistribution.emotion.length === 0 ? (
+                <div className="text-xs text-gray-500">No emotion data yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {emotionDriverDistribution.emotion.slice(0, 6).map((e) => (
+                    <div key={e.key} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-gray-900 truncate">{e.label}</div>
+                        <div className="text-[11px] font-semibold text-gray-500">
+                          {e.n} entries · {e.pct}%
+                        </div>
+                      </div>
+                      <div className="w-20 sm:w-24 h-1.5 rounded-full bg-gray-100 overflow-hidden shrink-0">
+                        <div
+                          className="h-full bg-primary-500"
+                          style={{ width: `${Math.max(4, Math.min(100, e.pct))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border border-gray-200 rounded-2xl p-4">
+              <div className="text-xs font-extrabold text-gray-700 mb-3">By driver</div>
+              {emotionDriverDistribution.driver.length === 0 ? (
+                <div className="text-xs text-gray-500">No driver data yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {emotionDriverDistribution.driver.slice(0, 6).map((d) => (
+                    <div key={d.key} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-gray-900 truncate">{d.label}</div>
+                        <div className="text-[11px] font-semibold text-gray-500">
+                          {d.n} entries · {d.pct}%
+                        </div>
+                      </div>
+                      <div className="w-20 sm:w-24 h-1.5 rounded-full bg-gray-100 overflow-hidden shrink-0">
+                        <div
+                          className="h-full bg-primary-500"
+                          style={{ width: `${Math.max(4, Math.min(100, d.pct))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ✅ Your patterns (성과 기준) */}
       <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
         <div>
           <div className="text-sm font-extrabold text-gray-900">Your patterns</div>
@@ -838,85 +1001,35 @@ const Diary: React.FC = () => {
             There is not enough data yet to build statistics (entries need both trade_price and ticker).
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="border border-gray-200 rounded-2xl p-4">
-              <div className="text-xs font-extrabold text-gray-700 mb-3">By emotion</div>
-              <div className="space-y-2">
-                {performanceStats.emotionList.slice(0, 6).map((s) => {
-                  const winRate = s.n ? Math.round((s.win / s.n) * 100) : 0;
-                  return (
-                    <div key={s.key} className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
-                        <div className="text-[11px] font-semibold text-gray-500">{s.n} samples</div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-sm font-extrabold text-gray-900">{winRate}%</div>
-                        <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                          Avg {s.avgMove >= 0 ? "+" : ""}
-                          {s.avgMove.toFixed(2)}%
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="border border-gray-200 rounded-2xl p-4">
-              <div className="text-xs font-extrabold text-gray-700 mb-3">By driver</div>
-              <div className="space-y-2">
-                {performanceStats.driverList.slice(0, 6).map((s) => {
-                  const winRate = s.n ? Math.round((s.win / s.n) * 100) : 0;
-                  return (
-                    <div key={s.key} className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
-                        <div className="text-[11px] font-semibold text-gray-500">{s.n} samples</div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-sm font-extrabold text-gray-900">{winRate}%</div>
-                        <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                          Avg {s.avgMove >= 0 ? "+" : ""}
-                          {s.avgMove.toFixed(2)}%
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="sm:col-span-2 border border-gray-200 rounded-2xl p-4 bg-gray-50">
-              <div className="text-xs font-extrabold text-gray-700 mb-2">Pattern watch</div>
-              {performanceStats.worstCombo ? (
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-extrabold text-gray-900">
-                      "{getEmotionLabel(performanceStats.worstCombo.emo)}" + "{getReasonLabel(performanceStats.worstCombo.drv)}"
-                    </div>
-                    <div className="text-[11px] font-semibold text-gray-500">
-                      {performanceStats.worstCombo.n} samples · Win rate {Math.round(performanceStats.worstCombo.winRate * 100)}%
-                    </div>
+          <div className="border border-gray-200 rounded-2xl p-4 bg-gray-50">
+            <div className="text-xs font-extrabold text-gray-700 mb-2">Winning Pattern Watch</div>
+            {performanceStats.worstCombo ? (
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-extrabold text-gray-900">
+                    "{getEmotionLabel(performanceStats.worstCombo.emo)}" + "{getReasonLabel(performanceStats.worstCombo.drv)}"
                   </div>
-                  <div className="text-right">
-                    <div className={`text-sm font-extrabold ${performanceStats.worstCombo.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                      Avg {performanceStats.worstCombo.avgMove >= 0 ? "+" : ""}
-                      {performanceStats.worstCombo.avgMove.toFixed(2)}%
-                    </div>
-                    <div className="text-[11px] font-semibold text-gray-500">
-                      If this combination keeps repeating, it’s a good idea to write down stricter rules or
-                      pre-conditions for yourself.
-                    </div>
+                  <div className="text-[11px] font-semibold text-gray-500">
+                    {performanceStats.worstCombo.n} samples · Win rate {Math.round(performanceStats.worstCombo.winRate * 100)}%
                   </div>
                 </div>
-              ) : (
-                <div className="text-sm text-gray-500">
-                  There is not enough data yet to build combination patterns (need at least 2 entries with the
-                  same emotion + driver).
+                <div className="text-right">
+                  <div className={`text-sm font-extrabold ${performanceStats.worstCombo.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                    Avg {performanceStats.worstCombo.avgMove >= 0 ? "+" : ""}
+                    {performanceStats.worstCombo.avgMove.toFixed(2)}%
+                  </div>
+                  <div className="text-[11px] font-semibold text-gray-500">
+                    If this combination keeps repeating, it’s a good idea to write down stricter rules or
+                    pre-conditions for yourself.
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">
+                There is not enough data yet to build combination patterns (need at least 2 entries with the
+                same emotion + driver).
+              </div>
+            )}
           </div>
         )}
       </div>
