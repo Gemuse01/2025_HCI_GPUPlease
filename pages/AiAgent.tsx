@@ -142,11 +142,30 @@ How can I support your journey today?`,
   }, [getSessionStorageKey, createInitialMessage]);
 
   // 세션 선택
-  const selectSession = (sessionId: string) => {
+  const selectSession = React.useCallback((sessionId: string) => {
     setCurrentSessionId(sessionId);
-    loadMessages(sessionId);
+    // 메시지 직접 로드 (loadMessages 함수 의존성 제거)
+    if (typeof window === 'undefined') return;
+    
+    const initialMsg = createInitialMessage();
+    
+    try {
+      const raw = window.localStorage.getItem(getSessionStorageKey(sessionId));
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<any>;
+        const loadedMessages = parsed.map((m) => ({
+          ...m,
+          timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        }));
+        setMessages(loadedMessages);
+      } else {
+        setMessages([initialMsg]);
+      }
+    } catch {
+      setMessages([initialMsg]);
+    }
     setSidebarOpen(false);
-  };
+  }, [getSessionStorageKey, createInitialMessage]);
 
   // 세션 삭제
   const deleteSession = (sessionId: string, e: React.MouseEvent) => {
