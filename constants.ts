@@ -67,28 +67,115 @@ export const MOCK_NEWS: NewsItem[] = [
 export const PERSONA_DETAILS = {
   [UserPersona.HELPER_SEEKER]: {
     label: "Help Seeker",
-    description: "You prefer expert guidance before making moves.",
-    advice: "We'll provide more detailed explanations and confirm your understanding before trades."
+    description: "Seeks reassurance and expert validation before acting.",
+    self_talk_vocab: {
+      reassurance_seeking: [
+        "I just wanted confirmation that this was the right move",
+        "I felt uneasy not hearing someone say it was okay",
+        "I needed a second opinion to feel safe",
+        "I didn’t fully trust my judgment without reassurance"
+      ],
+      urgency_relief: [
+        "Doing something felt better than waiting",
+        "I wanted to get rid of the uncertainty",
+        "Sitting still made me more anxious",
+        "I felt pressure to act rather than pause"
+      ],
+      authority_bias: [
+        "They sounded confident, so I followed it",
+        "If an expert said it, it had to be reasonable",
+        "I assumed they knew better than I did",
+        "I leaned on their conviction instead of questioning it"
+      ]
+    }
   },
+
   [UserPersona.STRUGGLER]: {
     label: "Solo Struggler",
-    description: "You try to figure it out yourself but often feel overwhelmed.",
-    advice: "We'll offer checklists and simplified summaries to reduce overwhelm."
+    description: "Tries to handle everything alone and carries full responsibility.",
+    self_talk_vocab: {
+      justification: [
+        "I already looked at this enough",
+        "My analysis was solid",
+        "I wouldn’t have entered without a reason",
+        "I already made up my mind"
+      ],
+      external_avoidance: [
+        "I didn’t need to read more news",
+        "Other opinions would just confuse me",
+        "I didn’t want to be swayed by headlines",
+        "Watching more analysis felt unnecessary"
+      ],
+      isolation: [
+        "This was my decision to make",
+        "I had to figure this out on my own",
+        "At the end of the day, it was on me",
+        "I didn’t want to rely on anyone else"
+      ],
+      signal_dismissal: [
+        "This drop probably didn’t mean much",
+        "Short-term moves aren’t that important",
+        "Reacting now would just be emotional",
+        "I didn’t want to overreact"
+      ]
+    }
   },
+
   [UserPersona.OPTIMIST]: {
     label: "Optimist",
-    description: "You believe in opportunities and are quick to act.",
-    advice: "We'll add gentle 'speed bumps' like risk reminders to help you double-check."
+    description: "Acts quickly, focusing on opportunity rather than risk.",
+    self_talk_vocab: {
+      opportunity_framing: [
+        "This felt like a good opportunity",
+        "I didn’t want to miss the upside",
+        "Moves like this don’t come often",
+        "This could bounce quickly"
+      ],
+      downside_minimization: [
+        "The downside didn’t seem that big",
+        "It probably wouldn’t drop much more",
+        "I wasn’t too worried about the risk",
+        "Losses here felt manageable"
+      ],
+      confirmation_bias: [
+        "Most of what I saw supported my view",
+        "The positive signals stood out more",
+        "I focused on what could go right",
+        "The risks didn’t feel convincing"
+      ]
+    }
   },
+
   [UserPersona.APATHETIC]: {
     label: "Motivation Seeker",
-    description: "You find it hard to stay interested or consistent.",
-    advice: "We'll keep things very brief and focus on automated alerts and weekly check-ins."
+    description: "Low engagement and low follow-through.",
+    self_talk_vocab: {
+      avoidance: [
+        "I didn’t really want to deal with it",
+        "Thinking about this felt exhausting",
+        "I kept putting it off",
+        "I just wanted to ignore it for now"
+      ],
+      disengagement: [
+        "I stopped checking after a while",
+        "I lost interest once it went bad",
+        "It didn’t feel worth the effort anymore",
+        "I mentally checked out"
+      ],
+      rule_abandonment: [
+        "I gave up on the plan halfway",
+        "The rules stopped feeling relevant",
+        "I didn’t bother sticking to my limits",
+        "Following through felt pointless"
+      ]
+    }
   },
+
   [UserPersona.UNDECIDED]: {
     label: "New User",
     description: "",
-    advice: ""
+    likely_blind_spots: [],
+    survey_focus: []
   }
 };
 

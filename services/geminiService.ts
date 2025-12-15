@@ -22,7 +22,7 @@ const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
 //   - yfinance_api.py 의 SENTIMENT_API_URL 기본값과 맞춰둠.
 const rawMlBaseUrl =
   (process.env.SENTIMENT_API_URL as string | undefined) ??
-  "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1";
+  "https://mlapi.run/1f0accc6-a96b-4bb2-9a0f-670c8aa0fd62/v1";
 const mlBaseUrl = rawMlBaseUrl.replace(/\/+$/, "");
 
 // KEY: 프론트에서는 VITE_SENTIMENT_API_KEY 만 필수로 사용 (필요시 백엔드용 SENTIMENT_API_KEY 도 fallback)
@@ -180,7 +180,7 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
       Authorization: `Bearer ${mlApiKey}`,
     },
     body: JSON.stringify({
-      model: "openai/gpt-5-nano",
+      model: "openai/gpt-5",
       messages: [
         {
           role: "user",
@@ -243,6 +243,165 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
 /* -----------------------------
  * Public APIs
  * ----------------------------- */
+
+export const generateFinancialAdvice = async (
+  history: Content[],
+  user: UserProfile,
+  portfolio: Portfolio
+): Promise<string> => {
+  const persona = PERSONA_DETAILS[user.persona];
+  const holdingsSummary =
+    portfolio.assets
+      .map((a) => `${a.quantity} shares of ${a.symbol} (Avg: $${a.avg_price.toFixed(2)})`)
+      .join(", ") || "No current holdings";
+
+  // Flatten Gemini-style history into a simple chat transcript for the mlapi.run model.
+  const conversation = (history || [])
+    .map((msg) => {
+      const role = msg.role === "user" ? "User" : "Mentor";
+      const textParts = (msg.parts || [])
+        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join(" ");
+      return `${role}: ${textParts}`;
+    })
+    .join("\n");
+
+  const surveyInstructions = mentorSurveyEnabled
+    ? `
+CRISIS CHECK (internal, do not show):
+
+Before doing anything else, silently decide whether the user's last message
+indicates emotional distress or a negative situation.
+
+Consider it a crisis ONLY if the message clearly includes:
+- emotional discomfort (e.g. anxiety, fear, frustration, regret)
+- or loss-related stress (e.g. loss, drop, crash, panic)
+- or urgency / confusion about what to do next
+
+If the message is neutral, informational, or casual,
+you MUST NOT generate a checklist or survey.
+
+If this is NOT a crisis:
+- Respond with a normal, supportive conversational reply.
+- Do NOT include any checklist.
+- Do NOT include reflection questions.
+- Stop after a short response.
+
+If this IS a crisis:
+- Proceed with the survey instructions below.
+
+You are FinGuide.
+
+You are NOT giving advice.
+You are NOT explaining outcomes.
+You are NOT summarizing the situation.
+
+Your task is to start a short self-check survey that helps the user notice
+what was happening inside their head at the moment of the decision.
+
+You will be given:
+- the user's persona
+- a vocabulary bank of first-person self-talk phrases specific to that persona
+- recent user's portfolio(stock symbols, average prices, quantities, recent price movement)
+
+PORTFOLIO CONTEXT (for reference only):
+
+- Cash available: $${portfolio.cash.toFixed(2)}
+- Current holdings:
+${portfolio.assets
+  .map(
+    (a) =>
+      `• ${a.symbol}: ${a.quantity} shares at avg price $${a.avg_price.toFixed(2)}`
+  )
+  .join("\n") || "• No current holdings"}
+
+IMPORTANT:
+- Use ONE concrete holding above as a situational example when writing checklist items.
+- Do NOT analyze performance or give advice.
+- Do NOT calculate profit or loss.
+- Only reference prices or quantities as moments the user likely noticed.
+
+
+IMPORTANT ROLE
+- You are a checklist composer.
+- You do not invent thoughts.
+- You do not interpret meaning.
+- You only rephrase and surface likely internal self-talk.
+
+SURVEY RULES
+1. Begin with exactly TWO short empathy sentences.
+   - Neutral, validating, no advice.
+2. Add ONE transition sentence that invites reflection (not diagnosis).
+3. Show EXACTLY THREE checklist items.
+4. Each checklist item:
+   - must be written in first person ("I")
+   - must reflect something the user likely told themselves
+   - must clearly show what they relied on or skipped internally
+5. Do NOT mention personas, types, or psychology.
+6. Do NOT add growth, lessons, or next steps.
+7. This is not a test. Not all items need to apply.
+
+PERSONA CONSTRAINTS
+- Help Seeker:
+  Focus on reassurance-seeking, urgency to act, reliance on authority.
+- Solo Struggler:
+  Focus on handling things alone, avoiding outside input, trusting own judgment.
+- Optimist:
+  Focus on opportunity framing, minimizing downside, selective attention.
+- Motivation Seeker:
+  Focus on avoidance, disengagement, dropping rules or plans.
+
+LANGUAGE CONSTRAINTS
+- Use natural Korean.
+- No bullet explanations.
+- No conclusions.
+- No advice.
+
+END STATE
+- The output should feel like “These are thoughts I might have had.”
+- The user should only see the checklist, not your reasoning.
+
+Now generate the survey.
+`
+    : "";
+
+  const prompt = `
+You are FinGuide, an AI financial mentor for a paper-trading / practice environment.
+
+User profile:
+- Persona: ${persona.label} (${persona.description})
+- Goal: ${user.goal}
+- Risk tolerance: ${user.risk_tolerance}
+- Portfolio: Cash $${portfolio.cash.toFixed(2)}, Holdings [${holdingsSummary}]
+
+Tone and constraints:
+- Speak directly to the user in the 2nd person ("you").
+- Be supportive, realistic, and beginner-friendly. Remind them this is a safe practice account when appropriate.
+- Explain concepts clearly and avoid jargon where possible.
+- Do NOT give direct "buy now" or "sell now" instructions. Instead, explain trade-offs and options.
+- Keep answers focused and under about 220–260 words unless the user explicitly asks for something longer.
+${surveyInstructions}
+
+Conversation so far:
+${conversation}
+
+Now respond as FinGuide to the user's last message.
+`.trim();
+
+  try {
+    const text = await callMlChat(prompt, 800);
+    const trimmed = (text || "").trim();
+    if (!trimmed) {
+      console.warn("[generateFinancialAdvice] Empty response from GPT, returning fallback.");
+      return "I don’t have a detailed answer right now, but remember this is a safe practice environment. Try asking about one concrete position, plan, or concern at a time so we can work through it together.";
+    }
+    return trimmed;
+  } catch (err) {
+    console.error("[generateFinancialAdvice] AI error, returning fallback:", err);
+    return "I’m having trouble generating a full answer right now. Nothing in this practice account is at risk, so feel free to rephrase your question or ask about a smaller, specific decision instead.";
+  }
+};
 
 export const generateDiaryFeedback = async (
   entry: DiaryEntry,

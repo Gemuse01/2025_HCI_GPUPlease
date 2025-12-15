@@ -94,4 +94,5 @@ export interface DocumentRow {
   press: string;
   published_at: Date | string;
   rank?: number;
+  applySurveyAnswers?: (answers: string[]) => Promise<{ persona: string; label: string; changed: boolean }>;
 }

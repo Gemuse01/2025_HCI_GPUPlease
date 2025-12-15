@@ -6,11 +6,53 @@ import os
 import json
 import re
 
+from dotenv import load_dotenv
 from qwen_client import call_qwen_finsec_model, build_security_prompt
 from openai import OpenAI
 
+from services.persona_engine import persona_bp
+
+# Load environment variables from .env.local (for Vite compatibility) and .env
+load_dotenv(".env.local")
+load_dotenv(".env")  # Also try .env if it exists
+
 app = Flask(__name__)
 CORS(app)  # allow all origins for /api/*
+
+# ---- OpenAI client setup (must be before blueprint registration) ----
+# Try both VITE_ prefixed (from .env.local) and non-prefixed versions
+SENTIMENT_API_URL = (
+    os.getenv("VITE_MLAPI_BASE_URL") or
+    os.getenv("MLAPI_BASE_URL") or
+    os.getenv("SENTIMENT_API_URL") or
+    "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1"
+)
+SENTIMENT_API_KEY = (
+    os.getenv("VITE_SENTIMENT_API_KEY") or
+    os.getenv("SENTIMENT_API_KEY") or
+    ""
+)
+
+# Initialize OpenAI client with error logging
+if SENTIMENT_API_KEY and SENTIMENT_API_URL:
+    try:
+        openai_client = OpenAI(base_url=SENTIMENT_API_URL, api_key=SENTIMENT_API_KEY)
+        print(f"[INFO] OpenAI client initialized successfully")
+        print(f"[DEBUG] API URL: {SENTIMENT_API_URL[:60]}...")
+        print(f"[DEBUG] API Key: {'***' + SENTIMENT_API_KEY[-4:] if len(SENTIMENT_API_KEY) > 4 else '***'}")
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize OpenAI client: {e}")
+        openai_client = None
+else:
+    openai_client = None
+    print("[WARNING] OpenAI client not initialized: SENTIMENT_API_KEY or SENTIMENT_API_URL not set")
+    print(f"[DEBUG] SENTIMENT_API_URL: {SENTIMENT_API_URL}")
+    print(f"[DEBUG] SENTIMENT_API_KEY: {'Set' if SENTIMENT_API_KEY else 'Not set'}")
+
+app.config["OPENAI_CLIENT"] = openai_client
+
+# Register persona blueprint (after openai_client is set in app.config)
+app.register_blueprint(persona_bp)
 
 
 def yahoo_search_symbols(query: str):
@@ -491,18 +533,9 @@ def get_news():
 # GPT-5 nano sentiment proxy  (/api/news-sentiment)
 # -----------------------------
 
-# 환경변수로 덮어쓸 수 있게 기본값만 설정
-SENTIMENT_API_URL = os.getenv(
-    "SENTIMENT_API_URL",
-    "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1",
-)
-SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
+# (OpenAI client is already set up at top of file and injected into app.config)
 
-openai_client = (
-    OpenAI(base_url=SENTIMENT_API_URL, api_key=SENTIMENT_API_KEY)
-    if SENTIMENT_API_KEY
-    else None
-)
+
 
 
 openai_client = (
