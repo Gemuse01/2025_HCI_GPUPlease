@@ -78,8 +78,13 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, closeMobile }) => {
                 <NavLink
                   key={item.name}
                   to={item.href}
-                  onClick={closeMobile}
-                  className={`group flex items-center px-3.5 py-3 text-sm font-bold rounded-xl transition-all duration-200 ${
+                  onClick={(e) => {
+                    e.preventDefault();
+                    closeMobile();
+                    // HashRouter를 사용할 때 명시적으로 네비게이션
+                    window.location.hash = item.href;
+                  }}
+                  className={`group flex items-center px-3.5 py-3 text-sm font-bold rounded-xl transition-all duration-200 cursor-pointer ${
                     isActive
                       ? 'bg-primary-50 text-primary-700'
                       : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
