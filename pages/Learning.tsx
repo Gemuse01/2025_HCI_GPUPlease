@@ -573,7 +573,7 @@ const Learning: React.FC = () => {
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-center justify-center min-h-full p-4 text-center">
             <div
-              className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity"
+              className="fixed inset-0 bg-gray-900/40 transition-opacity"
               onClick={() => setSelectedCard(null)}
             />
             <div className="relative bg-white rounded-2xl max-w-md w-full p-6 text-left shadow-xl transform transition-all animate-in zoom-in-95 duration-200">

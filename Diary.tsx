@@ -1274,7 +1274,7 @@ const Diary: React.FC = () => {
       {viewingEntry && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-end sm:items-center justify-center min-h-full p-4 text-center sm:p-0">
-            <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity" onClick={closeViewModal} />
+            <div className="fixed inset-0 bg-gray-900/40 transition-opacity" onClick={closeViewModal} />
             <div className="relative bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:max-w-lg w-full animate-in fade-in zoom-in-95 duration-200">
               <div className="bg-white px-6 py-6">
                 <div className="flex justify-between items-center mb-6">
@@ -1453,7 +1453,7 @@ const Diary: React.FC = () => {
       {reportOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-end sm:items-center justify-center min-h-full p-4 text-center sm:p-0">
-            <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity" onClick={closeReport} />
+            <div className="fixed inset-0 bg-gray-900/40 transition-opacity" onClick={closeReport} />
 
             <div className="relative bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:max-w-3xl w-full animate-in fade-in zoom-in-95 duration-200">
               <div className="bg-white px-6 py-6">

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
-import { TrendingUp, TrendingDown, PieChart, Activity, ArrowRight, Wallet, Lightbulb, CheckCircle2, GraduationCap } from 'lucide-react';
+import { TrendingUp, TrendingDown, PieChart, Activity, ArrowRight, Wallet, Lightbulb, CheckCircle2, GraduationCap, Info } from 'lucide-react';
 import { MOCK_DAILY_ADVICE, MOCK_STOCKS, INITIAL_CAPITAL, INITIAL_CAPITAL_KRW } from '../constants';
 
 const Dashboard: React.FC = () => {
@@ -10,6 +10,11 @@ const Dashboard: React.FC = () => {
   const [streak, setStreak] = useState(0);
   const [lastCheckDate, setLastCheckDate] = useState<string | null>(null);
   const [learningMissionDates, setLearningMissionDates] = useState<string[]>([]);
+
+  const todayKey = useMemo(
+    () => new Date().toISOString().slice(0, 10),
+    []
+  );
 
   // 한국 주식인지 확인하는 헬퍼 함수
   const isKoreanStock = (symbol: string) => {
@@ -83,6 +88,37 @@ const Dashboard: React.FC = () => {
       // ignore
     }
   }, []);
+
+  const hasTodayLearning = useMemo(
+    () => learningMissionDates.includes(todayKey),
+    [learningMissionDates, todayKey]
+  );
+
+  const hasTodayTrade = useMemo(
+    () =>
+      transactions.some(
+        (tx) => new Date(tx.date).toISOString().slice(0, 10) === todayKey
+      ),
+    [transactions, todayKey]
+  );
+
+  const hasTodayDiary = useMemo(
+    () =>
+      diary.some(
+        (entry) => new Date(entry.date).toISOString().slice(0, 10) === todayKey
+      ),
+    [diary, todayKey]
+  );
+
+  const loopSteps = [
+    { key: 'learn', label: 'Learn (3–5 min)', done: hasTodayLearning },
+    { key: 'trade', label: 'Trade (Practice)', done: hasTodayTrade },
+    { key: 'reflect', label: 'Reflect (1 min)', done: hasTodayDiary },
+  ] as const;
+
+  const completedCount = loopSteps.filter((s) => s.done).length;
+  const loopProgressPct = (completedCount / loopSteps.length) * 100;
+  const firstIncompleteIndex = loopSteps.findIndex((s) => !s.done);
 
   const handleCheckIn = () => {
     const today = new Date();
@@ -182,7 +218,6 @@ const Dashboard: React.FC = () => {
     return days;
   }, [learningMissionDates]);
 
-
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8">
       {/* Welcome & Daily Tip */}
@@ -194,6 +229,125 @@ const Dashboard: React.FC = () => {
         <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl flex items-start max-w-md shadow-sm">
            <Lightbulb className="text-indigo-600 shrink-0 mr-3" size={24} />
            <p className="text-sm text-indigo-900 font-medium leading-relaxed">{dailyAdvice}</p>
+        </div>
+      </div>
+
+      {/* Your Loop Today (Learn → Trade → Reflect) */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-4 sm:p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm sm:text-base font-extrabold text-gray-900">
+              Your Loop Today
+            </h2>
+            <div className="relative group">
+              <button
+                type="button"
+                className="p-1 rounded-full border border-gray-200 text-gray-500 bg-white hover:bg-gray-50"
+              >
+                <Info size={14} />
+              </button>
+              <div className="absolute left-0 mt-2 w-64 rounded-xl bg-gray-900 text-white text-xs font-semibold px-3 py-2 shadow-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-150 z-10">
+                Learn → Trade → Reflect 순서로 하루 루프를 한 번만 완성하면 충분해요.
+                각 카드를 눌러 바로 해당 화면으로 이동할 수 있어요.
+              </div>
+            </div>
+          </div>
+          <div className="text-[11px] sm:text-xs font-semibold text-gray-500 whitespace-nowrap">
+            Current streak: {streak} day{streak === 1 ? '' : 's'} ·{' '}
+            {Math.round(loopProgressPct)}%
+          </div>
+        </div>
+
+        <div className="w-full h-1.5 rounded-full bg-gray-100 overflow-hidden">
+          <div
+            className="h-full bg-primary-500 transition-all"
+            style={{ width: `${loopProgressPct}%` }}
+          />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          {loopSteps.map((step, idx) => {
+            const isActive =
+              !step.done &&
+              (firstIncompleteIndex === -1 ? idx === 0 : idx === firstIncompleteIndex);
+
+            const baseClasses =
+              'flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 transition-all';
+            const stateClasses = step.done
+              ? 'bg-primary-50 border-primary-100'
+              : isActive
+              ? 'bg-blue-50 border-blue-200'
+              : 'bg-gray-50 border-gray-100';
+
+            const stepNumber = idx + 1;
+
+            const to =
+              step.key === 'learn'
+                ? '/learning'
+                : step.key === 'trade'
+                ? '/trading'
+                : '/diary';
+
+            return (
+              <Link key={step.key} to={to} className="block">
+                <div className={`${baseClasses} ${stateClasses}`}>
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`mt-0.5 w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold border ${
+                        step.done
+                          ? 'bg-primary-600 text-white border-primary-600'
+                          : isActive
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-gray-600 border-gray-300'
+                      }`}
+                    >
+                      {step.done ? (
+                        <CheckCircle2 size={16} className="text-white" />
+                      ) : (
+                        stepNumber
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-sm sm:text-base font-extrabold text-gray-900">
+                        {stepNumber}.{' '}
+                        {step.key === 'learn'
+                          ? 'Learn'
+                          : step.key === 'trade'
+                          ? 'Trade'
+                          : 'Reflect'}
+                      </div>
+                      <div className="text-[11px] sm:text-xs font-medium text-gray-500 mt-0.5">
+                        {step.key === 'learn' &&
+                          'Review today’s lesson & complete a quick quiz.'}
+                        {step.key === 'trade' &&
+                          'Make a virtual trade to put your learning into action.'}
+                        {step.key === 'reflect' &&
+                          'Write a short diary entry to reflect on your practice trade.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right-side CTA buttons for step 1 & 3 */}
+                  {step.key === 'learn' && (
+                    <button
+                      type="button"
+                      className="px-4 py-2 rounded-xl bg-primary-600 text-white text-xs sm:text-sm font-bold hover:bg-primary-700 whitespace-nowrap"
+                    >
+                      Start today&apos;s quiz
+                    </button>
+                  )}
+                  {step.key === 'reflect' && (
+                    <button
+                      type="button"
+                      className="px-4 py-2 rounded-xl bg-primary-600 text-white text-xs sm:text-sm font-bold hover:bg-primary-700 whitespace-nowrap"
+                    >
+                      Write trade diary
+                    </button>
+                  )}
+                </div>
+              </Link>
+            );
+          })}
         </div>
       </div>
 

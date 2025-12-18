@@ -850,7 +850,7 @@ Rules:
 # -----------------------------
 
 # 엘리스에서 받은 URL / API KEY (원래는 환경변수로 빼는 것이 안전함)
-MY_API_URL = os.getenv("QWEN_FINSEC_URL", "https://mlapi.run/0cd91e2f-6603-4699-b9d8-57c93f05b37e")
+MY_API_URL = os.getenv("QWEN_FINSEC_URL", "https://mlapi.run/b802ea74-6293-4353-a262-7e08464e5461")
 MY_API_KEY = os.getenv(
     "QWEN_FINSEC_KEY",
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjUzMjc0NDQsIm5iZiI6MTc2NTMyNzQ0NCwiZXhwIjoxNzY1Mzc4Nzk5LCJrZXlfaWQiOiI5MWQ1N2UwMi03ODYxLTQ4YzQtODU1Ni1hMGVkYmIyNWQxNjIifQ.D-ybt57LKXBcckn2LgHXx6YI2g49UYI4f1vPAxZgpgk",
